@@ -1,0 +1,24 @@
+2019-12-18 18:08:01
+Timing is on.
+ ?column? | usename | client_addr | waiting |  pid  | sess_id 
+----------+---------+-------------+---------+-------+---------
+ 00:00:00 | gpadmin |             | f       | 55865 |   54597
+(1 row)
+
+Time: 13.383 ms
+2019-12-18 18:09:01
+Timing is on.
+ ?column? | usename | client_addr | waiting |  pid  | sess_id 
+----------+---------+-------------+---------+-------+---------
+ 00:00:00 | gpadmin |             | f       | 56522 |   54620
+(1 row)
+
+Time: 10.664 ms
+2019-12-18 18:10:01
+Timing is on.
+ ?column? | usename | client_addr | waiting |  pid  | sess_id 
+----------+---------+-------------+---------+-------+---------
+ 00:00:00 | gpadmin |             | f       | 57139 |   54630
+(1 row)
+
+Time: 13.216 ms

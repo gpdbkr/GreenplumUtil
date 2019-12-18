@@ -1,0 +1,328 @@
+# cat check_process.sh
+
+while true
+do
+ls -ltr 000* > temp.txt
+TOT=`ls -l 000* | wc -l`
+PID=`ps -ef |grep "startup pass 3" | grep -v grep | awk '{print $2}'`
+if [ "$PID" = "" ]
+then
+  echo "INFO:: `date` | Now is not STARTUP PASS 3. | "XLOG : $TOT" | `ps -ef |grep postgres | grep startup | grep -v grep | awk '{print "Current : "$11, $12, $13}'`"
+else
+
+XLOG=`/usr/sbin/lsof -p $PID   | grep pg_xlog | cut -d "/" -f 7`
+NOW=`grep -n $XLOG temp.txt | cut -d ":" -f 1`
+echo "INFO:: `date` | $NOW of $TOT "
+
+fi
+
+sleep 60
+
+done
+
+
+# [gpadmin@hdm2 pg_xlog]$ cat check_process.log
+INFO:: Thu Dec  8 15:27:54 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 121 | Current : startup pass 2
+INFO:: Thu Dec  8 15:28:55 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 122 | Current : startup pass 2
+INFO:: Thu Dec  8 15:29:55 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 124 | Current : startup pass 2
+INFO:: Thu Dec  8 15:30:55 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 126 | Current : startup pass 2
+INFO:: Thu Dec  8 15:31:55 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 128 | Current : startup pass 2
+INFO:: Thu Dec  8 15:32:55 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 129 | Current : startup pass 2
+INFO:: Thu Dec  8 15:33:56 KST 2016 | 9 of 129
+INFO:: Thu Dec  8 15:34:56 KST 2016 | 9 of 129
+INFO:: Thu Dec  8 15:35:57 KST 2016 | 9 of 129
+INFO:: Thu Dec  8 15:36:57 KST 2016 | 10 of 129
+INFO:: Thu Dec  8 15:37:58 KST 2016 | 10 of 129
+INFO:: Thu Dec  8 15:38:58 KST 2016 | 11 of 129
+INFO:: Thu Dec  8 15:39:59 KST 2016 | 12 of 129
+INFO:: Thu Dec  8 15:40:59 KST 2016 | 12 of 129
+INFO:: Thu Dec  8 15:42:00 KST 2016 | 13 of 129
+INFO:: Thu Dec  8 15:43:00 KST 2016 | 13 of 129
+INFO:: Thu Dec  8 15:44:01 KST 2016 | 13 of 129
+INFO:: Thu Dec  8 15:45:01 KST 2016 | 13 of 129
+INFO:: Thu Dec  8 15:46:02 KST 2016 | 14 of 129
+INFO:: Thu Dec  8 15:47:02 KST 2016 | 14 of 129
+INFO:: Thu Dec  8 15:48:04 KST 2016 | 14 of 129
+INFO:: Thu Dec  8 15:49:05 KST 2016 | 14 of 129
+INFO:: Thu Dec  8 15:50:05 KST 2016 | 14 of 129
+INFO:: Thu Dec  8 15:51:06 KST 2016 | 15 of 129
+INFO:: Thu Dec  8 15:52:06 KST 2016 | 15 of 129
+INFO:: Thu Dec  8 15:53:07 KST 2016 | 15 of 129
+INFO:: Thu Dec  8 15:54:07 KST 2016 | 15 of 129
+INFO:: Thu Dec  8 15:55:08 KST 2016 | 15 of 129
+INFO:: Thu Dec  8 15:56:08 KST 2016 | 16 of 129
+INFO:: Thu Dec  8 15:57:09 KST 2016 | 16 of 129
+INFO:: Thu Dec  8 15:58:09 KST 2016 | 16 of 129
+INFO:: Thu Dec  8 15:59:10 KST 2016 | 16 of 129
+INFO:: Thu Dec  8 16:00:10 KST 2016 | 16 of 129
+INFO:: Thu Dec  8 16:01:11 KST 2016 | 17 of 129
+INFO:: Thu Dec  8 16:02:11 KST 2016 | 17 of 129
+INFO:: Thu Dec  8 16:03:12 KST 2016 | 17 of 129
+INFO:: Thu Dec  8 16:04:12 KST 2016 | 17 of 129
+INFO:: Thu Dec  8 16:05:13 KST 2016 | 17 of 129
+INFO:: Thu Dec  8 16:06:13 KST 2016 | 18 of 129
+INFO:: Thu Dec  8 16:07:14 KST 2016 | 18 of 129
+INFO:: Thu Dec  8 16:08:14 KST 2016 | 18 of 129
+INFO:: Thu Dec  8 16:09:15 KST 2016 | 18 of 129
+INFO:: Thu Dec  8 16:10:15 KST 2016 | 19 of 129
+INFO:: Thu Dec  8 16:11:16 KST 2016 | 19 of 129
+INFO:: Thu Dec  8 16:12:17 KST 2016 | 20 of 129
+INFO:: Thu Dec  8 16:13:17 KST 2016 | 20 of 129
+INFO:: Thu Dec  8 16:14:18 KST 2016 | 20 of 129
+INFO:: Thu Dec  8 16:15:18 KST 2016 | 21 of 129
+INFO:: Thu Dec  8 16:16:19 KST 2016 | 21 of 129
+INFO:: Thu Dec  8 16:17:19 KST 2016 | 21 of 129
+INFO:: Thu Dec  8 16:18:20 KST 2016 | 22 of 129
+INFO:: Thu Dec  8 16:19:20 KST 2016 | 22 of 129
+INFO:: Thu Dec  8 16:20:21 KST 2016 | 22 of 129
+INFO:: Thu Dec  8 16:21:21 KST 2016 | 22 of 129
+INFO:: Thu Dec  8 16:22:22 KST 2016 | 22 of 129
+INFO:: Thu Dec  8 16:23:22 KST 2016 | 23 of 129
+INFO:: Thu Dec  8 16:24:23 KST 2016 | 23 of 129
+INFO:: Thu Dec  8 16:25:23 KST 2016 | 23 of 129
+INFO:: Thu Dec  8 16:26:24 KST 2016 | 23 of 129
+INFO:: Thu Dec  8 16:27:24 KST 2016 | 23 of 129
+INFO:: Thu Dec  8 16:28:25 KST 2016 | 24 of 129
+INFO:: Thu Dec  8 16:29:25 KST 2016 | 24 of 129
+INFO:: Thu Dec  8 16:30:26 KST 2016 | 24 of 129
+INFO:: Thu Dec  8 16:31:26 KST 2016 | 24 of 129
+INFO:: Thu Dec  8 16:32:27 KST 2016 | 24 of 129
+INFO:: Thu Dec  8 16:33:27 KST 2016 | 25 of 129
+INFO:: Thu Dec  8 16:34:28 KST 2016 | 25 of 129
+INFO:: Thu Dec  8 16:35:28 KST 2016 | 25 of 129
+INFO:: Thu Dec  8 16:36:29 KST 2016 | 25 of 129
+INFO:: Thu Dec  8 16:37:29 KST 2016 | 25 of 129
+INFO:: Thu Dec  8 16:38:30 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:39:30 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:40:31 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:41:31 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:42:32 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:43:32 KST 2016 | 26 of 129
+INFO:: Thu Dec  8 16:44:33 KST 2016 | 27 of 129
+INFO:: Thu Dec  8 16:45:33 KST 2016 | 27 of 129
+INFO:: Thu Dec  8 16:46:34 KST 2016 | 27 of 129
+INFO:: Thu Dec  8 16:47:34 KST 2016 | 27 of 129
+INFO:: Thu Dec  8 16:48:35 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:49:35 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:50:36 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:51:36 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:52:37 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:53:38 KST 2016 | 28 of 129
+INFO:: Thu Dec  8 16:54:38 KST 2016 | 29 of 129
+INFO:: Thu Dec  8 16:55:39 KST 2016 | 29 of 129
+INFO:: Thu Dec  8 16:56:39 KST 2016 | 29 of 129
+INFO:: Thu Dec  8 16:57:40 KST 2016 | 29 of 129
+INFO:: Thu Dec  8 16:58:40 KST 2016 | 30 of 129
+INFO:: Thu Dec  8 16:59:41 KST 2016 | 30 of 129
+INFO:: Thu Dec  8 17:00:41 KST 2016 | 30 of 129
+INFO:: Thu Dec  8 17:01:42 KST 2016 | 30 of 129
+INFO:: Thu Dec  8 17:02:42 KST 2016 | 30 of 129
+INFO:: Thu Dec  8 17:03:43 KST 2016 | 31 of 129
+INFO:: Thu Dec  8 17:04:43 KST 2016 | 31 of 129
+INFO:: Thu Dec  8 17:05:44 KST 2016 | 31 of 129
+INFO:: Thu Dec  8 17:06:44 KST 2016 | 31 of 129
+INFO:: Thu Dec  8 17:07:45 KST 2016 | 31 of 129
+INFO:: Thu Dec  8 17:08:45 KST 2016 | 32 of 129
+INFO:: Thu Dec  8 17:09:46 KST 2016 | 32 of 129
+INFO:: Thu Dec  8 17:10:46 KST 2016 | 32 of 129
+INFO:: Thu Dec  8 17:11:47 KST 2016 | 32 of 129
+INFO:: Thu Dec  8 17:12:47 KST 2016 | 32 of 129
+INFO:: Thu Dec  8 17:13:48 KST 2016 | 33 of 129
+INFO:: Thu Dec  8 17:14:48 KST 2016 | 33 of 129
+INFO:: Thu Dec  8 17:15:49 KST 2016 | 33 of 129
+INFO:: Thu Dec  8 17:16:49 KST 2016 | 33 of 129
+INFO:: Thu Dec  8 17:17:50 KST 2016 | 33 of 129
+INFO:: Thu Dec  8 17:18:50 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:19:51 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:20:51 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:21:52 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:22:52 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:23:53 KST 2016 | 34 of 129
+INFO:: Thu Dec  8 17:24:53 KST 2016 | 35 of 129
+INFO:: Thu Dec  8 17:25:54 KST 2016 | 35 of 129
+INFO:: Thu Dec  8 17:26:54 KST 2016 | 35 of 129
+INFO:: Thu Dec  8 17:27:55 KST 2016 | 35 of 129
+INFO:: Thu Dec  8 17:28:55 KST 2016 | 35 of 129
+INFO:: Thu Dec  8 17:29:56 KST 2016 | 36 of 129
+INFO:: Thu Dec  8 17:30:56 KST 2016 | 36 of 129
+INFO:: Thu Dec  8 17:31:57 KST 2016 | 36 of 129
+INFO:: Thu Dec  8 17:32:57 KST 2016 | 36 of 129
+INFO:: Thu Dec  8 17:33:58 KST 2016 | 36 of 129
+INFO:: Thu Dec  8 17:34:58 KST 2016 | 37 of 129
+INFO:: Thu Dec  8 17:35:59 KST 2016 | 37 of 129
+INFO:: Thu Dec  8 17:36:59 KST 2016 | 37 of 129
+INFO:: Thu Dec  8 17:38:00 KST 2016 | 37 of 129
+INFO:: Thu Dec  8 17:39:00 KST 2016 | 37 of 129
+INFO:: Thu Dec  8 17:40:01 KST 2016 | 38 of 129
+INFO:: Thu Dec  8 17:41:01 KST 2016 | 38 of 129
+INFO:: Thu Dec  8 17:42:02 KST 2016 | 38 of 129
+INFO:: Thu Dec  8 17:43:02 KST 2016 | 38 of 129
+INFO:: Thu Dec  8 17:44:03 KST 2016 | 38 of 129
+INFO:: Thu Dec  8 17:45:03 KST 2016 | 39 of 129
+INFO:: Thu Dec  8 17:46:04 KST 2016 | 39 of 129
+INFO:: Thu Dec  8 17:47:04 KST 2016 | 39 of 129
+INFO:: Thu Dec  8 17:48:05 KST 2016 | 39 of 129
+INFO:: Thu Dec  8 17:49:05 KST 2016 | 39 of 129
+INFO:: Thu Dec  8 17:50:06 KST 2016 | 40 of 129
+INFO:: Thu Dec  8 17:51:06 KST 2016 | 40 of 129
+INFO:: Thu Dec  8 17:52:07 KST 2016 | 40 of 129
+INFO:: Thu Dec  8 17:53:07 KST 2016 | 40 of 129
+INFO:: Thu Dec  8 17:54:08 KST 2016 | 40 of 129
+INFO:: Thu Dec  8 17:55:08 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 17:56:09 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 17:57:09 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 17:58:10 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 17:59:10 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 18:00:11 KST 2016 | 41 of 129
+INFO:: Thu Dec  8 18:01:11 KST 2016 | 42 of 129
+INFO:: Thu Dec  8 18:02:12 KST 2016 | 42 of 129
+INFO:: Thu Dec  8 18:03:12 KST 2016 | 42 of 129
+INFO:: Thu Dec  8 18:04:13 KST 2016 | 42 of 129
+INFO:: Thu Dec  8 18:05:13 KST 2016 | 43 of 129
+INFO:: Thu Dec  8 18:06:14 KST 2016 | 43 of 129
+INFO:: Thu Dec  8 18:07:14 KST 2016 | 43 of 129
+INFO:: Thu Dec  8 18:08:15 KST 2016 | 43 of 129
+INFO:: Thu Dec  8 18:09:15 KST 2016 | 43 of 129
+INFO:: Thu Dec  8 18:10:16 KST 2016 | 44 of 129
+INFO:: Thu Dec  8 18:11:17 KST 2016 | 44 of 129
+INFO:: Thu Dec  8 18:12:17 KST 2016 | 44 of 129
+INFO:: Thu Dec  8 18:13:18 KST 2016 | 44 of 129
+INFO:: Thu Dec  8 18:14:18 KST 2016 | 45 of 129
+INFO:: Thu Dec  8 18:15:19 KST 2016 | 45 of 129
+INFO:: Thu Dec  8 18:16:19 KST 2016 | 45 of 129
+INFO:: Thu Dec  8 18:17:20 KST 2016 | 46 of 129
+INFO:: Thu Dec  8 18:18:20 KST 2016 | 46 of 129
+INFO:: Thu Dec  8 18:19:21 KST 2016 | 46 of 129
+INFO:: Thu Dec  8 18:20:21 KST 2016 | 46 of 129
+INFO:: Thu Dec  8 18:21:22 KST 2016 | 47 of 129
+INFO:: Thu Dec  8 18:22:22 KST 2016 | 47 of 129
+INFO:: Thu Dec  8 18:23:23 KST 2016 | 47 of 129
+INFO:: Thu Dec  8 18:24:23 KST 2016 | 47 of 129
+INFO:: Thu Dec  8 18:25:24 KST 2016 | 48 of 129
+INFO:: Thu Dec  8 18:26:24 KST 2016 | 48 of 129
+INFO:: Thu Dec  8 18:27:25 KST 2016 | 48 of 129
+INFO:: Thu Dec  8 18:28:25 KST 2016 | 48 of 129
+INFO:: Thu Dec  8 18:29:26 KST 2016 | 48 of 129
+INFO:: Thu Dec  8 18:30:26 KST 2016 | 49 of 129
+INFO:: Thu Dec  8 18:31:27 KST 2016 | 49 of 129
+INFO:: Thu Dec  8 18:32:27 KST 2016 | 49 of 129
+INFO:: Thu Dec  8 18:33:28 KST 2016 | 49 of 129
+INFO:: Thu Dec  8 18:34:28 KST 2016 | 50 of 129
+INFO:: Thu Dec  8 18:35:29 KST 2016 | 50 of 129
+INFO:: Thu Dec  8 18:36:29 KST 2016 | 50 of 129
+INFO:: Thu Dec  8 18:37:30 KST 2016 | 50 of 129
+INFO:: Thu Dec  8 18:38:30 KST 2016 | 50 of 129
+INFO:: Thu Dec  8 18:39:31 KST 2016 | 51 of 129
+INFO:: Thu Dec  8 18:40:31 KST 2016 | 51 of 129
+INFO:: Thu Dec  8 18:41:32 KST 2016 | 51 of 129
+INFO:: Thu Dec  8 18:42:32 KST 2016 | 51 of 129
+INFO:: Thu Dec  8 18:43:33 KST 2016 | 51 of 129
+INFO:: Thu Dec  8 18:44:33 KST 2016 | 52 of 129
+INFO:: Thu Dec  8 18:45:34 KST 2016 | 52 of 129
+INFO:: Thu Dec  8 18:46:36 KST 2016 | 52 of 129
+INFO:: Thu Dec  8 18:47:36 KST 2016 | 52 of 129
+INFO:: Thu Dec  8 18:48:37 KST 2016 | 52 of 129
+INFO:: Thu Dec  8 18:49:37 KST 2016 | 53 of 129
+INFO:: Thu Dec  8 18:50:38 KST 2016 | 53 of 129
+INFO:: Thu Dec  8 18:51:38 KST 2016 | 53 of 129
+INFO:: Thu Dec  8 18:52:39 KST 2016 | 53 of 129
+INFO:: Thu Dec  8 18:53:39 KST 2016 | 53 of 129
+INFO:: Thu Dec  8 18:54:40 KST 2016 | 54 of 129
+INFO:: Thu Dec  8 18:55:40 KST 2016 | 54 of 129
+INFO:: Thu Dec  8 18:56:41 KST 2016 | 54 of 129
+INFO:: Thu Dec  8 18:57:41 KST 2016 | 54 of 129
+INFO:: Thu Dec  8 18:58:42 KST 2016 | 54 of 129
+INFO:: Thu Dec  8 18:59:42 KST 2016 | 55 of 129
+INFO:: Thu Dec  8 19:00:43 KST 2016 | 55 of 129
+INFO:: Thu Dec  8 19:01:43 KST 2016 | 55 of 129
+INFO:: Thu Dec  8 19:02:44 KST 2016 | 55 of 129
+INFO:: Thu Dec  8 19:03:44 KST 2016 | 55 of 129
+INFO:: Thu Dec  8 19:04:45 KST 2016 | 56 of 129
+INFO:: Thu Dec  8 19:05:45 KST 2016 | 56 of 129
+INFO:: Thu Dec  8 19:06:46 KST 2016 | 56 of 129
+INFO:: Thu Dec  8 19:07:46 KST 2016 | 56 of 129
+INFO:: Thu Dec  8 19:08:47 KST 2016 | 56 of 129
+INFO:: Thu Dec  8 19:09:47 KST 2016 | 57 of 129
+INFO:: Thu Dec  8 19:10:48 KST 2016 | 57 of 129
+INFO:: Thu Dec  8 19:11:48 KST 2016 | 57 of 129
+INFO:: Thu Dec  8 19:12:49 KST 2016 | 57 of 129
+INFO:: Thu Dec  8 19:13:49 KST 2016 | 57 of 129
+INFO:: Thu Dec  8 19:14:50 KST 2016 | 58 of 129
+INFO:: Thu Dec  8 19:15:50 KST 2016 | 58 of 129
+INFO:: Thu Dec  8 19:16:51 KST 2016 | 58 of 129
+INFO:: Thu Dec  8 19:17:51 KST 2016 | 58 of 129
+INFO:: Thu Dec  8 19:18:52 KST 2016 | 58 of 129
+INFO:: Thu Dec  8 19:19:52 KST 2016 | 59 of 129
+INFO:: Thu Dec  8 19:20:53 KST 2016 | 59 of 129
+INFO:: Thu Dec  8 19:21:53 KST 2016 | 59 of 129
+INFO:: Thu Dec  8 19:22:54 KST 2016 | 59 of 129
+INFO:: Thu Dec  8 19:23:54 KST 2016 | 59 of 129
+INFO:: Thu Dec  8 19:24:56 KST 2016 | 60 of 129
+INFO:: Thu Dec  8 19:25:57 KST 2016 | 60 of 129
+INFO:: Thu Dec  8 19:26:57 KST 2016 | 60 of 129
+INFO:: Thu Dec  8 19:27:58 KST 2016 | 60 of 129
+INFO:: Thu Dec  8 19:28:58 KST 2016 | 60 of 129
+INFO:: Thu Dec  8 19:29:59 KST 2016 | 61 of 129
+INFO:: Thu Dec  8 19:30:59 KST 2016 | 61 of 129
+INFO:: Thu Dec  8 19:32:00 KST 2016 | 61 of 129
+INFO:: Thu Dec  8 19:33:00 KST 2016 | 61 of 129
+INFO:: Thu Dec  8 19:34:01 KST 2016 | 62 of 129
+INFO:: Thu Dec  8 19:35:01 KST 2016 | 62 of 129
+INFO:: Thu Dec  8 19:36:02 KST 2016 | 62 of 129
+INFO:: Thu Dec  8 19:37:02 KST 2016 | 62 of 129
+INFO:: Thu Dec  8 19:38:03 KST 2016 | 62 of 129
+INFO:: Thu Dec  8 19:39:03 KST 2016 | 63 of 129
+INFO:: Thu Dec  8 19:40:04 KST 2016 | 63 of 129
+INFO:: Thu Dec  8 19:41:04 KST 2016 | 63 of 129
+INFO:: Thu Dec  8 19:42:05 KST 2016 | 63 of 129
+INFO:: Thu Dec  8 19:43:06 KST 2016 | 63 of 129
+INFO:: Thu Dec  8 19:44:06 KST 2016 | 64 of 129
+INFO:: Thu Dec  8 19:45:07 KST 2016 | 64 of 129
+INFO:: Thu Dec  8 19:46:07 KST 2016 | 64 of 129
+INFO:: Thu Dec  8 19:47:08 KST 2016 | 64 of 129
+INFO:: Thu Dec  8 19:48:08 KST 2016 | 64 of 129
+INFO:: Thu Dec  8 19:49:09 KST 2016 | 65 of 129
+INFO:: Thu Dec  8 19:50:09 KST 2016 | 65 of 129
+INFO:: Thu Dec  8 19:51:10 KST 2016 | 65 of 129
+INFO:: Thu Dec  8 19:52:10 KST 2016 | 65 of 129
+INFO:: Thu Dec  8 19:53:11 KST 2016 | 66 of 129
+INFO:: Thu Dec  8 19:54:11 KST 2016 | 66 of 129
+INFO:: Thu Dec  8 19:55:12 KST 2016 | 66 of 129
+INFO:: Thu Dec  8 19:56:12 KST 2016 | 66 of 129
+INFO:: Thu Dec  8 19:57:13 KST 2016 | 66 of 129
+INFO:: Thu Dec  8 19:58:13 KST 2016 | 67 of 129
+INFO:: Thu Dec  8 19:59:14 KST 2016 | 67 of 129
+INFO:: Thu Dec  8 20:00:14 KST 2016 | 67 of 129
+INFO:: Thu Dec  8 20:01:15 KST 2016 | 67 of 129
+INFO:: Thu Dec  8 20:02:15 KST 2016 | 68 of 129
+INFO:: Thu Dec  8 20:03:16 KST 2016 | 68 of 129
+INFO:: Thu Dec  8 20:04:16 KST 2016 | 68 of 129
+INFO:: Thu Dec  8 20:05:17 KST 2016 | 68 of 129
+INFO:: Thu Dec  8 20:06:17 KST 2016 | 69 of 129
+INFO:: Thu Dec  8 20:07:18 KST 2016 | 69 of 129
+INFO:: Thu Dec  8 20:08:18 KST 2016 | 69 of 129
+INFO:: Thu Dec  8 20:09:19 KST 2016 | 69 of 129
+INFO:: Thu Dec  8 20:10:19 KST 2016 | 70 of 129
+INFO:: Thu Dec  8 20:11:20 KST 2016 | 70 of 129
+INFO:: Thu Dec  8 20:12:20 KST 2016 | 70 of 129
+INFO:: Thu Dec  8 20:13:21 KST 2016 | 70 of 129
+INFO:: Thu Dec  8 20:14:21 KST 2016 | 71 of 129
+INFO:: Thu Dec  8 20:15:22 KST 2016 | 71 of 129
+INFO:: Thu Dec  8 20:16:22 KST 2016 | 71 of 129
+INFO:: Thu Dec  8 20:17:23 KST 2016 | 71 of 129
+INFO:: Thu Dec  8 20:18:23 KST 2016 | 80 of 129
+INFO:: Thu Dec  8 20:19:24 KST 2016 | 83 of 129
+INFO:: Thu Dec  8 20:20:24 KST 2016 | 83 of 129
+INFO:: Thu Dec  8 20:21:25 KST 2016 | 95 of 129
+INFO:: Thu Dec  8 20:22:25 KST 2016 | 101 of 129
+INFO:: Thu Dec  8 20:23:26 KST 2016 | 108 of 129
+INFO:: Thu Dec  8 20:24:26 KST 2016 | 115 of 129
+INFO:: Thu Dec  8 20:25:27 KST 2016 | 122 of 129
+INFO:: Thu Dec  8 20:26:27 KST 2016 | 129 of 129
+INFO:: Thu Dec  8 20:27:27 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+INFO:: Thu Dec  8 20:28:27 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+INFO:: Thu Dec  8 20:29:28 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+INFO:: Thu Dec  8 20:30:28 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+INFO:: Thu Dec  8 20:31:28 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+INFO:: Thu Dec  8 20:32:29 KST 2016 | Now is not STARTUP PASS 3. | XLOG : 18 |
+[gpadmin@hdm2 pg_xlog]$

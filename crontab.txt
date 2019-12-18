@@ -1,0 +1,25 @@
+# Backup
+30 00 * * * /data/dba/utilities/cron_backup.sh &
+20 * * * * /data/dba/utilities/cron_backup_pghba.sh &
+
+# DB monitoring
+#* * * * * /bin/bash /data/dba/utilities/stattool/bin/dostat 1 1 &
+
+# System monitoring
+* * * * * /bin/bash /data/dba/utilities/cron_sys_rsc.sh 5 11 &
+
+# DB Vacuum analyze
+00 00 * * * /data/dba/utilities/cron_vacuum_analyze.sh &
+
+# Delete log
+00 01 * * * /data/dba/utilities/cron_delete_log.sh &
+
+# configuration file sync(smdw sysn)
+10 * * * * /data/dba/utilities/cron_pghba_sync.sh &
+
+# upload dblog
+10 00 * * * /data/dba/utilities/cron_log_load.sh &
+
+#*/5 * * * * /data/dba/utilities/chk_system.sh &
+#*/5 * * * * /data/dba/utilities/chk_health_daemon.sh &
+

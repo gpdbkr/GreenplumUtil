@@ -1,0 +1,25 @@
+#!/bin/sh
+DOSTAT_PATH="/data/dba/utilities/stattool/bin" 
+export DOSTAT_PATH
+
+${DOSTAT_PATH}/memory.sh >> /data/dba/utilities/statlog/memory.`/bin/date '+%Y%m%d'`.txt &
+MEM=$!
+
+${DOSTAT_PATH}/network.sh >> /data/dba/utilities/statlog/network.`/bin/date '+%Y%m%d'`.txt &
+NET=$!
+
+${DOSTAT_PATH}/iostat.sh >> /data/dba/utilities/statlog/iostat.`/bin/date '+%Y%m%d'`.txt &
+DISK=$!
+
+${DOSTAT_PATH}/cpu.sh >> /data/dba/utilities/statlog/cpu.`/bin/date '+%Y%m%d'`.txt &
+CPU=$!
+
+${DOSTAT_PATH}/swapused.sh  5 11 >> /data/dba/utilities/statlog/swapused.`/bin/date '+%Y%m%d'`.txt &
+SWAP=$!
+
+${DOSTAT_PATH}/usedmem.sh  5 11 >> /data/dba/utilities/statlog/usedmem.`/bin/date '+%Y%m%d'`.txt &
+USED=$!
+
+trap "/usr/bin/kill ${MEM} ${NET} ${DISK} ${CPU} ${SWAP} ; exit" 2 15
+
+wait

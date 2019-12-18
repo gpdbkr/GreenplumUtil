@@ -1,0 +1,9 @@
+Timing is on.
+2019-12-18 18:08:01|0
+Time: 14.011 ms
+Timing is on.
+2019-12-18 18:09:01|0
+Time: 11.624 ms
+Timing is on.
+2019-12-18 18:10:01|0
+Time: 17.838 ms

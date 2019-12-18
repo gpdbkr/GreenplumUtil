@@ -1,0 +1,74 @@
+#!/bin/sh
+DOSTAT_PATH="/data/dba/utilities/stattool/bin" 
+export DOSTAT_PATH
+
+if [ $# -ne 2 ]
+then
+   /bin/echo "usage is $0 <interval> <count>"
+   exit 1
+fi
+
+ITERS=`/usr/bin/expr $2 + 1`
+
+if [ -f /data/dba/utilities/statlog/qq.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/qq.sh $1 $2 >> /data/dba/utilities/statlog/qq.`/bin/date '+%Y%m%d'`.txt &
+QQ=$!
+else
+${DOSTAT_PATH}/qq.sh $1 $2 > /data/dba/utilities/statlog/qq.`/bin/date '+%Y%m%d'`.txt &
+QQ=$!
+fi
+
+if [ -f /data/dba/utilities/statlog/locks.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/locks.sh $1 $2 >> /data/dba/utilities/statlog/locks.`/bin/date '+%Y%m%d'`.txt &
+LOCKS=$!
+else
+${DOSTAT_PATH}/locks.sh $1 $2 > /data/dba/utilities/statlog/locks.`/bin/date '+%Y%m%d'`.txt &
+LOCKS=$!
+fi
+
+if [ -f /data/dba/utilities/statlog/lt.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/lt.sh $1 $2 >> /data/dba/utilities/statlog/lt.`/bin/date '+%Y%m%d'`.txt &
+LT=$!
+else
+${DOSTAT_PATH}/lt.sh $1 $2 > /data/dba/utilities/statlog/lt.`/bin/date '+%Y%m%d'`.txt &
+LT=$!
+fi
+
+if [ -f /data/dba/utilities/statlog/rss.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/rss.sh $1 $2 >> /data/dba/utilities/statlog/rss.`/bin/date '+%Y%m%d'`.txt &
+RSS=$!
+else
+${DOSTAT_PATH}/rss.sh $1 $2 > /data/dba/utilities/statlog/rss.`/bin/date '+%Y%m%d'`.txt &
+RSS=$!
+fi
+
+
+
+if [ -f /data/dba/utilities/statlog/session.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/session.sh $1 $2 >> /data/dba/utilities/statlog/session.`/bin/date '+%Y%m%d'`.txt &
+SS=$!
+else
+${DOSTAT_PATH}/session.sh $1 $2 > /data/dba/utilities/statlog/session.`/bin/date '+%Y%m%d'`.txt &
+SS=$!
+fi
+
+
+if [ -f /data/dba/utilities/statlog/qqit.`/bin/date '+%Y%m%d'`.txt ]
+then
+${DOSTAT_PATH}/session.sh $1 $2 >> /data/dba/utilities/statlog/qqit.`/bin/date '+%Y%m%d'`.txt &
+QQIT=$!
+else
+${DOSTAT_PATH}/session.sh $1 $2 > /data/dba/utilities/statlog/qqit.`/bin/date '+%Y%m%d'`.txt &
+QQIT=$!
+fi
+
+
+trap "/usr/bin/kill ${QQ} ${LOCKS} ${RSS} ${SS} ${QQIT}; exit" 2 15
+
+wait
+

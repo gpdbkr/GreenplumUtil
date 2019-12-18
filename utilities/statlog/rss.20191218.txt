@@ -1,0 +1,21 @@
+2019-12-18 18:08:01
+Timing is on.
+ rsqname | countlimit | countvalue | waiters | running | costlimit | costvalue | ignorecostlimit | overcommit 
+---------+------------+------------+---------+---------+-----------+-----------+-----------------+------------
+(0 rows)
+
+Time: 16.836 ms
+2019-12-18 18:09:01
+Timing is on.
+ rsqname | countlimit | countvalue | waiters | running | costlimit | costvalue | ignorecostlimit | overcommit 
+---------+------------+------------+---------+---------+-----------+-----------+-----------------+------------
+(0 rows)
+
+Time: 12.233 ms
+2019-12-18 18:10:01
+Timing is on.
+ rsqname | countlimit | countvalue | waiters | running | costlimit | costvalue | ignorecostlimit | overcommit 
+---------+------------+------------+---------+---------+-----------+-----------+-----------------+------------
+(0 rows)
+
+Time: 23.043 ms

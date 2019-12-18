@@ -1,0 +1,17 @@
+##GPDB5
+
+# DB monitoring
+#* * * * * /bin/bash /home/gpadmin/utilities/stattool/bin/dostat 1 1 &
+# DB Vacuum analyze
+#00 00 * * * /home/gpadmin/utilities/cron_vacuum_analyze.sh &
+# System monitoring
+#* * * * * /bin/bash /home/gpadmin/utilities/cron_sys_rsc.sh 5 11 &
+
+## GPDB 6
+# DB monitoring
+* * * * * /bin/bash /data/dba/utilities/stattool/bin/dostat 1 1 &
+# DB Vacuum analyze
+00 00 * * * /data/dba/utilities/cron_vacuum_analyze.sh &
+# System monitoring
+* * * * * /bin/bash /data/dba/utilities/cron_sys_rsc.sh 5 11 &
+

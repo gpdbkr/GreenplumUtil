@@ -1,0 +1,21 @@
+2019-12-18 18:08:01
+Timing is on.
+ locktype | relation | mode | waiting_pid | running_pid | gp_segment_id 
+----------+----------+------+-------------+-------------+---------------
+(0 rows)
+
+Time: 53.152 ms
+2019-12-18 18:09:01
+Timing is on.
+ locktype | relation | mode | waiting_pid | running_pid | gp_segment_id 
+----------+----------+------+-------------+-------------+---------------
+(0 rows)
+
+Time: 66.147 ms
+2019-12-18 18:10:01
+Timing is on.
+ locktype | relation | mode | waiting_pid | running_pid | gp_segment_id 
+----------+----------+------+-------------+-------------+---------------
+(0 rows)
+
+Time: 46.623 ms
