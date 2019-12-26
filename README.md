@@ -3,8 +3,11 @@
 
 수행 방법
 
-1. 소스 다운로드
-2. uncompress
-3. 파일 경로
-   /data/dba/utilities
-4. 파일 실행 권한 추가
+$ cd /data                       
+$ unzip GreenplumUtil-master.zip 
+$ mv GreenplumUtil-master dba    
+$ cd /data/dba
+$ chmod +x ./utilities/*.sh
+$ chmod +x ./utilities/cron_log_load.sql
+$ chmod +x ./utilities/stattool/bin/*.sh
+$ chmod +x ./utilities/stattool/bin/*
