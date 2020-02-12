@@ -1,0 +1,13 @@
+1. gpfailover 
+systemd에서 인식 할 수 있도록 #!/bin/bash Line 추가
+
+2. vip_env.sh
+ARPING_INTERFACE 변수 추가
+VIP_NETMASK 변수 추가
+
+3. vip_start.sh
+ARPING 인터페이스 수정 (VIP_INTERFACE->ARPING_INTERFACE)
+
+4. gpfailover.sh
+VIP UP check 스크립트 수정 (up되어도 fail로 뜨는문제 해결)
+ARPING 인터페이스 수정 (VIP_INTERFACE->ARPING_INTERFACE)

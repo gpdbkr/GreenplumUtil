@@ -1,0 +1,10 @@
+[Unit]
+Description=GPDB failover
+
+[Service]
+Type=forking
+ExecStart=/etc/rc.d/init.d/gpfailover start
+ExecStop=/etc/rc.d/init.d/gpfailover stop
+
+[Install]
+WantedBy=multi-user.target

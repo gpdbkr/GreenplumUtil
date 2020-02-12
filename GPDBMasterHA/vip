@@ -1,0 +1,32 @@
+case "$1" in
+    start) #
+        echo -n "Starting VIP... "
+        /usr/local/bin/vip_start.sh 
+        sleep 0.1
+        echo
+        $0 status
+        ;;
+
+    stop)
+        echo -n "Shutdown VIP... "
+        /usr/local/bin/vip_stop.sh 
+        sleep 0.1
+        echo
+        $0 status
+        ;;
+
+    restart)
+        $0 stop
+        $0 start
+        ;;
+
+    status)
+        ifconfig | grep addr
+        ;;
+    *)
+    echo "Usage : $0 {start|stop|restart|status}"
+    exit 1
+esac
+exit 0
+
+

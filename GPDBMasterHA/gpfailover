@@ -1,0 +1,38 @@
+#!/bin/bash
+
+case "$1" in
+    start) #
+        echo -n "Starting GPDB Auto failover Daemon: "
+        nohup /usr/local/bin/gpfailover.sh > /dev/null 2>&1 &
+        sleep 0.1
+        echo
+        $0 status
+        ;;
+
+    stop)
+        echo -n "Sutting GPDB Auto failover Daemon: "
+        /usr/local/bin/gpfailovershutdown.sh > /dev/null 2>&1
+        sleep 0.1
+        echo
+        $0 status
+        ;;
+
+    restart)
+        $0 stop
+        $0 start
+        ;;
+
+    status)
+        NO_OF_PROCESS=`ps -ef | grep gpfailover | grep -v grep | grep -v status | grep -v stop | wc -l`
+        if [ $NO_OF_PROCESS -eq 0 ]; then
+            echo "gpfailover daemon is not running"
+        else
+            echo "gpfailover daemon is running" 
+        fi
+        ;;
+    *)
+    echo "Usage : $0 {start|stop|restart|status}"
+    exit 1
+esac
+exit 0
+

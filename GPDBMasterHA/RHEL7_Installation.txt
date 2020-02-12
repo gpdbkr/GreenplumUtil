@@ -1,0 +1,58 @@
+tar xf gpdb_master_failover.tar
+cd bin
+chmod +x *
+vi vip_env.sh   ### editing 
+cp *.sh /usr/local/bin
+cp vip /etc/rc.d/init.d/
+cp gpfailover /etc/rc.d/init.d/
+
+
+○systemd service 파일 생성
+
+#vi /usr/lib/systemd/system/gpfailover.service
+
+[Unit]
+Description=GPDB failover
+
+[Service]
+Type=forking
+ExecStart=/etc/rc.d/init.d/gpfailover start
+ExecStop=/etc/rc.d/init.d/gpfailover stop
+
+[Install]
+WantedBy=multi-user.target
+
+○ systemctl daemon 등록 및 실행
+
+# systemctl daemon-reload
+# systemctl start gpfailover
+
+○ 데몬 실행 확인
+
+# systemctl is-active gpfailover
+active
+
+# systemctl status gpfailover
+● gpfailover.service - GPDB failover
+   Loaded: loaded (/usr/lib/systemd/system/gpfailover.service; enabled; vendor preset: disabled)
+   Active: active (running) since Tue 2018-02-20 02:47:19 KST; 1 day 21h ago
+ Main PID: 1421 (gpfailover.sh)
+   CGroup: /system.slice/gpfailover.service
+           ├─ 1421 /bin/bash /usr/local/bin/gpfailover.sh
+           └─16251 sleep 60
+
+Feb 20 02:47:19 smdw.gphd.local systemd[1]: Starting GPDB failover...
+Feb 20 02:47:19 smdw.gphd.local gpfailover[1420]: Starting GPDB Auto failover Daemon:
+Feb 20 02:47:19 smdw.gphd.local gpfailover[1420]: gpfailover daemon is running
+Feb 20 02:47:19 smdw.gphd.local systemd[1]: Started GPDB failover.
+
+
+
+
+○ service enable (smdw only)
+# systemctl enable gpfailover
+Created symlink from /etc/systemd/system/multi-user.target.wants/gpfailover.service to /usr/lib/systemd/system/gpfailover.service.
+
+# ll /etc/systemd/system/multi-user.target.wants/gpfailover.service 
+lrwxrwxrwx 1 root root 42 Feb 22 00:12 /etc/systemd/system/multi-user.target.wants/gpfailover.service -> /usr/lib/systemd/system/gpfailover.service
+
