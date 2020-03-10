@@ -6,10 +6,9 @@ fi
 
 DBNAME="testdb"  ###<<<<<<<<<<<<<<<<<< Need to modify database name
 
-
 DATE="/bin/date"
 ECHO="/bin/echo"
-LOGFILE="/data/dba/utilities/log/vacuum_full_analyze_`date '+%Y-%m-%d'`.log"
+LOGFILE=/data/dba/utilities/log/vacuum_full_analyze_`date '+%Y-%m-%d'`.log
 
 $ECHO "  CATALOG TABLE VACUUM ANALYZE started at " > $LOGFILE
 $DATE >> $LOGFILE 
