@@ -219,9 +219,9 @@ KAFKA:
 20200401:18:05:11 gpkafka:gpadmin:mdw:103524-[INFO]:-External table "public"."gpkafkaloadext_be1c95c0f2b8cbddcdc1ba51d401d4d4" already exist, reuse.
 20200401:18:05:11 gpkafka:gpadmin:mdw:103524-[INFO]:-Start job f840edb3c9eeb3f3ffd569364e6bd5a7: input<broker:etl:9092 topic:topic_for_gpkafka>, output<host:mdw db:testdb table:"public"."data_from_kafka">
 20200401:18:05:11 gpkafka:gpadmin:mdw:103524-[INFO]:-gpkafka job has started
-StartTime			EndTime				MsgNum		MsgSize		InsertedRecords	RejectedRecords	Speed
-2020-04-01T09:05:11.923504Z	2020-04-01T09:05:12.163744Z	9         	217            	9         	0         	903B/sec
-2020-04-01T09:05:12.209568Z	2020-04-01T09:05:12.225395Z	0         	0              	0         	0         	0B/sec
+StartTime     EndTime       MsgNum    MsgSize   InsertedRecords RejectedRecords Speed
+2020-04-01T09:05:11.923504Z 2020-04-01T09:05:12.163744Z 9           217             9           0           903B/sec
+2020-04-01T09:05:12.209568Z 2020-04-01T09:05:12.225395Z 0           0               0           0           0B/sec
 20200401:18:05:12 gpkafka:gpadmin:mdw:103524-[INFO]:-Job finished: f840edb3c9eeb3f3ffd569364e6bd5a7
 20200401:18:05:12 gpkafka:gpadmin:mdw:103524-[INFO]:-Target table: "public"."data_from_kafka"
 20200401:18:05:12 gpkafka:gpadmin:mdw:103524-[INFO]:-Inserted 9 rows
@@ -483,8 +483,31 @@ KAFKA:
 ###################################################################################################################
 
 10. GPSS Json 데이터 INSERT/UPDATE/DELETE
+ 1) 데이터 셋 생성 (Greenplum)
 
- 1) Kafka / ETL 서버
+ mdw$ psql testdb << EOF
+\timing off
+\t
+\a
+\pset fieldsep ,
+\o cdcdemo.csv
+select i, 'v1', i, i, 'v1', i::char(4) from generate_series(0, 9999) as i;
+select i, 'v1', i, i, 'n1', i::char(4) from generate_series(100, 400) as i;
+select i, 'v2', i, i, 'v2', i::char(4) from generate_series(0, 9999) as i;
+select i, 'v2', i, i, 'n2', i::char(4) from generate_series(100, 400) as i;
+select i, 'v3', i, i, 'v3', i::char(4) from generate_series(0, 9999) as i;
+select i, 'v3', i, i, 'n3', i::char(4) from generate_series(100, 400) as i;
+select i, 'v4', i, i, 'v4', i::char(4) from generate_series(0, 9999) as i;
+select i, 'v4', i, i, 'n4', i::char(4) from generate_series(100, 400) as i;
+select i, 'v5', i, i, 'v5', i::char(4) from generate_series(0, 9999) as i;
+select i, 'v5', i, i, 'n5', i::char(4) from generate_series(100, 400) as i;
+select i, 'v3', NULL,NULL,NULL,1 from generate_series(600, 800) as i;
+EOF
+ 
+   - etl 서버에 파일 전송 
+ mdw$ scp cdcdemo.csv etl:/tmp
+
+ 2) Kafka / ETL 서버
     etl$ ssh etl
     
     - 토픽 생성
@@ -500,27 +523,27 @@ KAFKA:
     - 샘플 Json 데이터 생성 (github 에서 다운로드)
     - 제일 마지막 컬럼이 delete f/g (1이면 delete)        
     etl$ head cdcdemo.csv
-3,v1   ,3,3,v1,3   ,0
-0,v1   ,0,0,v1,0   ,0
-5,v1   ,5,5,v1,5   ,0
-2,v1   ,2,2,v1,2   ,0
-1,v1   ,1,1,v1,1   ,0
-4,v1   ,4,4,v1,4   ,0
-12,v1   ,12,12,v1,12  ,0
-6,v1   ,6,6,v1,6   ,0
-9,v1   ,9,9,v1,9   ,0
-13,v1   ,13,13,v1,13  ,0
+0,v1,0,0,v1,0
+1,v1,1,1,v1,1
+2,v1,2,2,v1,2
+3,v1,3,3,v1,3
+4,v1,4,4,v1,4
+5,v1,5,5,v1,5
+6,v1,6,6,v1,6
+7,v1,7,7,v1,7
+8,v1,8,8,v1,8
+9,v1,9,9,v1,9
     etl$ tail cdcdemo.csv
-751,v3   ,,,,,1
-754,v3   ,,,,,1
-757,v3   ,,,,,1
-770,v3   ,,,,,1
-772,v3   ,,,,,1
-779,v3   ,,,,,1
-785,v3   ,,,,,1
-787,v3   ,,,,,1
-794,v3   ,,,,,1
-798,v3   ,,,,,1
+791,v3,,,,1
+792,v3,,,,1
+793,v3,,,,1
+794,v3,,,,1
+795,v3,,,,1
+796,v3,,,,1
+797,v3,,,,1
+798,v3,,,,1
+799,v3,,,,1
+800,v3,,,,1
 
    - 토픽에 Json 데이터 적재   
    etl$  /usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic cdcdemo < /tmp/cdcdemo/cdcdemo.csv
@@ -653,49 +676,82 @@ KAFKA:
 
 
 
-
-
-
 11. 기타
-psql testdb << EOF
-\timing off
-\t
-\a
-\pset fieldsep ,
-\o cdcdemo.txt
-select i, 'v1', i, i, 'v1', i::char(4) from generate_series(0, 9999) as i;
-select i, 'v1', i, i, 'n1', i::char(4) from generate_series(100, 400) as i;
-select i, 'v2', i, i, 'v2', i::char(4) from generate_series(0, 9999) as i;
-select i, 'v2', i, i, 'n2', i::char(4) from generate_series(100, 400) as i;
-select i, 'v3', i, i, 'v3', i::char(4) from generate_series(0, 9999) as i;
-select i, 'v3', i, i, 'n3', i::char(4) from generate_series(100, 400) as i;
-select i, 'v4', i, i, 'v4', i::char(4) from generate_series(0, 9999) as i;
-select i, 'v4', i, i, 'n4', i::char(4) from generate_series(100, 400) as i;
-select i, 'v5', i, i, 'v5', i::char(4) from generate_series(0, 9999) as i;
-select i, 'v5', i, i, 'n5', i::char(4) from generate_series(100, 400) as i;
-select i, 'v3', NULL,NULL,NULL,1 from generate_series(600, 800) as i;
-EOF
+   1) gpss 데몬이 kill 될 경우 submit를 다시 해야 함.
+   2) 타겟 테이블에 truncate 할 경우 테이블 락 발생, Delete all은 상관 없음.
+
+
+12.  에러 처리
+   1) 컬럼 개수가 맞지 않을 경우 
+
+      에러 메시지 확인 - 컬럼
+    
+      20200402:15:28:37 gpss:gpadmin:mdw:057928-[ERROR]:-Failed to execute batch: pq: segment reject limit reached, aborting operation  (seg2 slice1 172.16.25.134:6000 pid=15976)
+      Use following query to access the detailed error:
+      SELECT cmdtime, errmsg, COALESCE(rawdata, encode(rawbytes, 'escape')) AS rawdata
+          FROM gp_read_error_log('"public"."gpkafkaloadext_6f2aafd95b6fcd4367ef91b66d0412bb"') WHERE cmdtime >= '2020-04-02 15:28:37.639269+09' AND cmdtime <= '2020-04-02 15:28:37.929376+09'
+      
+      -- 에러 row 쿼리 조회
+      [gpadmin@mdw ~]$
+      testdb=# SELECT cmdtime, errmsg, COALESCE(rawdata, encode(rawbytes, 'escape')) AS rawdata
+      testdb-# FROM gp_read_error_log('"public"."gpkafkaloadext_6f2aafd95b6fcd4367ef91b66d0412bb"') WHERE cmdtime >= '2020-04-02 15:28:37.639269+09' AND cmdtime <= '2020-04-02 15:28:37.929376+09';
+                  cmdtime            |             errmsg             |          rawdata
+      -------------------------------+--------------------------------+---------------------------
+       2020-04-02 15:28:37.67138+09  | missing data for column "e_v5" | 1200,v1,1200,1200,v1,1200
+       2020-04-02 15:28:37.67138+09  | missing data for column "e_v5" | 1201,v1,1201,1201,v1,1201
+       2020-04-02 15:28:37.67138+09  | missing data for column "e_v5" | 1202,v1,1202,1202,v1,1202
+      
+      -- 에러 row 정리
+      testdb=# select gp_truncate_error_log ('"public"."gpkafkaloadext_6f2aafd95b6fcd4367ef91b66d0412bb"');
+       gp_truncate_error_log
+      -----------------------
+       t
+      (1 row)
+
+      Time: 26.875 ms
+
+      --에러 row 삭제 확인
+      testdb=# SELECT cmdtime, errmsg, COALESCE(rawdata, encode(rawbytes, 'escape')) AS rawdata
+      FROM gp_read_error_log('"public"."gpkafkaloadext_6f2aafd95b6fcd4367ef91b66d0412bb"') WHERE cmdtime >= '2020-04-02 15:28:37.639269+09' AND cmdtime <= '2020-04-02 15:28:37.929376+09';
+       cmdtime | errmsg | rawdata
+      ---------+--------+---------
+      (0 rows)
+
+      Time: 4.795 ms
+      testdb=#
+
+       --토픽 리셋 정리
+       $ gpkafka load --force-reset-earliest ~/cdcdemo.yaml
+       $ gpkafka load --help 
+          Usage:
+            gpkafka load <job config yml file> [flags]
+
+          Flags:
+                --config string                  gpss json configuration file. it's preferred to be set.
+                --debug-port string              enable pprof debug server at specified port
+            -f, --force                          force load config when submitting a job which is already running
+                --force-reset-earliest           continue to load from earliest available message
+                --force-reset-latest             continue to load from new messages
+                --force-reset-timestamp string   continue to load from offset corresponding to the input timestamp, the timestamp should be millisecond format
+                --gpfdist-host string            gpfdist host address. it will override the value of gpss config.
+                --gpfdist-port int32             gpfdist host port. it will override the value of gpss config.
+            -h, --help                           help for load
+                --name string                    job's name
+                --partition                      display progress info by partition
+                --quit-at-eof                    quit after reading kafka EOF
+
+          Global Flags:
+            -l, --log-dir string   log directory, default is $HOME/gpAdminLogs
+                --verbose          enable debug log
 
 
 
 
 
+######### 참고 
+      -- 토픽 메시지 삭제 
+ $ /usr/local/kafka/bin/kafka-topics.sh --delete --zookeeper localhost:2181/greenplum-kafka --topic cdcdemo
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+ --토픽 메시지 삭제 확인
+ $ /usr/local/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cdcdemo --from-beginning 
 
