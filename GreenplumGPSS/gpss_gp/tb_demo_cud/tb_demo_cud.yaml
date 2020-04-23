@@ -1,0 +1,35 @@
+DATABASE: gpssdb
+USER: gpadmin
+HOST: mdw
+PORT: 5432
+KAFKA:
+   INPUT:
+     SOURCE:
+        BROKERS: kafka:9092
+        TOPIC: gpss_test.tb_demo_cud
+     COLUMNS:
+        - NAME: j
+          TYPE: json
+     FORMAT: json
+     ERROR_LIMIT: 10
+   OUTPUT:
+     SCHEMA: gpss_test
+     TABLE: tb_demo_cud_stg
+     MAPPING:
+        - NAME: id
+          EXPRESSION: (j->>'id')::int
+        - NAME: c1
+          EXPRESSION: (j->>'c1')::text
+        - NAME: c2
+          EXPRESSION: (j->>'c2')::text
+        - NAME: c3
+          EXPRESSION: (j->>'c3')::text
+        - NAME: gpss_ts
+          EXPRESSION: (to_timestamp((j->>'gpss_ts')::text, 'yyyy-mm-dd hh24:mi:ss.us'))::timestamp
+        - NAME: gpss_fg
+          EXPRESSION: (j->>'gpss_fg')::text
+   COMMIT:
+     MINIMAL_INTERVAL: 1000
+   TASK:
+      POST_BATCH_SQL: select gpss_test.udf_sync_gpss_test_tb_demo_cud_update();
+      BATCH_INTERVAL: 1

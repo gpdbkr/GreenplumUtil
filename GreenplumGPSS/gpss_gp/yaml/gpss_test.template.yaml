@@ -1,0 +1,35 @@
+DATABASE: gpssdb
+USER: gpadmin
+HOST: mdw
+PORT: 5432
+KAFKA
+   INPUT:
+     SOURCE:
+       BROKERS: 172.16.25.227:9092 
+       TOPIC: gpss_test.template
+     COLUMN:
+        - NAME: j
+          TYPE: json
+     FORMAT: json
+     ERROR_LIMIT: 10
+   OUTPUT:
+     SCHEMA: gpss_stg
+     TABLE: gpss_test_template
+     MAPPING:
+        - NAME: id
+          EXPRESSION: gpss.json2num  (j,'id')
+        - NAME: c1
+          EXPRESSION: gpss.json2text (j,'c1')
+        - NAME: c2
+          EXPRESSION: gpss.json2text (j,'c2')
+        - NAME: c3
+          EXPRESSION: gpss.json2text (j,'c3')
+        - NAME: gpss_ts
+          EXPRESSION: gpss.json2ts   (j,'gpss_ts')
+        - NAME: gpss_fg
+          EXPRESSION: gpss.json2text (j,'gpss_fg')
+   COMMIT:
+      MINIMAL_INTERNAL: 1000
+   TASK:
+      POST_BATCH_SQL: select gpss_stg.udf_sync_gpss_test_template();
+      BATCH_INTERNAL: 1
