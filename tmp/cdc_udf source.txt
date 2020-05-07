@@ -1,0 +1,285 @@
+
+drop table public.template_src ;
+create table public.template_src
+(
+  id int,
+  c1 varchar(20),
+  c2 varchar(20),
+  c3 varchar(20),
+  ts timestamp
+) distributed by (id)
+;
+
+drop table public.template_target ;
+create table public.template_target
+(
+  id int,
+  c1 varchar(20),
+  c2 varchar(20),
+  c3 varchar(20),
+  ts timestamp
+) distributed by (id)
+;
+
+drop table public.template_stg ;
+create table public.template_stg
+(
+  id int,
+  c1 varchar(20),
+  c2 varchar(20),
+  c3 varchar(20),
+  ts timestamp,
+  cud_fg varchar(10)
+) distributed by (id)
+;
+
+insert into public.template_stg values(1,'a','a','a',now(),'I');
+insert into public.template_stg values(1,'b','b','b',now(),'U');
+insert into public.template_stg values(1,NULL,NULL,NULL,now(),'D');
+insert into public.template_stg values(1,'c','c','c',now(),'I');
+insert into public.template_stg values(1,'b','b','b',now(),'U');
+insert into public.template_stg values(1,NULL,'a2',NULL,now(),'U');
+
+
+--------------------------------------------------------------------------------
+
+create or replace function public.udf_template_sync_update_all()
+returns text as
+$body$
+
+declare
+  v_del_cnt integer := 0;
+  v_ins_cnt integer := 0;
+  v_up_cnt  integer := 0;
+
+  v_min_ts   timestamp;
+  v_max_ts   timestamp;
+  v_start_ts timestamp;
+  v_end_ts   timestamp;
+
+  v_result      text;
+  v_err_msg     text;
+  v_cdc_del_cnt integer := 0;
+
+begin
+  v_start_ts := clock_timestamp();
+
+  select min(ts), max(ts)
+    into v_min_ts, v_max_ts
+    from public.template_stg;
+
+  delete from public.template_target a
+   using public.template_stg b
+   where a.id = b.id
+     and b.cud_fg = 'D'
+     and b.ts >= v_min_ts
+     and b.ts <= v_max_ts;
+
+  get diagnostics v_del_cnt = ROW_COUNT ;
+
+  insert into public.template_target (id,c1,c2,c3,ts)
+  with tmp as
+  (
+  select *
+    from (
+          select id,c1,c2,c3,ts,cud_fg,row_number() over (partition by id order by ts desc) rnk
+            from public.template_stg a
+           where a.cud_fg in ('I','D')
+             and ts>= v_min_ts
+             and ts <= v_max_ts
+         ) a
+   where cud_fg = 'I'
+     and rnk = 1
+  )
+  select a.id, a.c1, a.c2, a.c3, a.ts
+    from tmp a
+    left outer join public.template_target b
+      on a.id = b.id
+   where b.id is null;
+
+  get diagnostics v_ins_cnt = ROW_COUNT ;
+
+  with tmp as
+  (
+  select *
+    from (
+          select id, max(c1) c1, max(c2) c2, max(c3) c3, max(ts) ts
+            from (
+                  select id
+                       , last_value(c1) over (partition by id order by case when c1 is not null then 1 else 0 end asc, ts rows between unbounded preceding and unbounded following) c1
+                       , last_value(c2) over (partition by id order by case when c2 is not null then 1 else 0 end asc, ts rows between unbounded preceding and unbounded following) c2
+                       , last_value(c3) over (partition by id order by case when c3 is not null then 1 else 0 end asc, ts rows between unbounded preceding and unbounded following) c3
+                       , last_value(ts) over (partition by id order by ts rows between unbounded preceding and unbounded following) ts
+                    from public.template_stg a
+                   where a.cud_fg in  ('U','I')
+                     and ts >= v_min_ts
+                     and ts <= v_max_ts
+                 ) a
+           group by id
+         ) tmp
+  )
+  update public.template_target a
+  set
+      c1 = coalesce(b.c1,a.c1),
+      c2 = coalesce(b.c2,a.c2),
+      c3 = coalesce(b.c3,a.c3),
+      ts = coalesce(b.ts,a.ts)
+  from tmp b
+  where a.id = b.id;
+
+  get diagnostics v_up_cnt = ROW_COUNT ;
+
+  v_end_ts := clock_timestamp();
+
+  delete from public.template_stg
+   where ts >= v_min_ts
+     and ts <= v_max_ts;
+
+  get diagnostics v_cdc_del_cnt = ROW_COUNT ;
+
+  v_result := 'start: '  || to_char(v_start_ts,'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'end: '    || to_char(v_end_ts,  'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'rows: '   || trim(to_char(v_cdc_del_cnt,'99,999,999,999')) || ', ' ||
+              'delete: ' || trim(to_char(v_del_cnt,    '99,999,999,999')) || ', ' ||
+              'insert: ' || trim(to_char(v_ins_cnt,    '99,999,999,999')) || ', ' ||
+              'update: ' || trim(to_char(v_up_cnt,     '99,999,999,999')) ;
+
+  raise notice '%' , v_result;
+
+  return v_result;
+
+  exception
+  when others then
+       v_err_msg := sqlerrm;
+       raise notice 'error_msg : %', v_err_msg;
+       return sqlerrm;
+
+end;
+$body$
+language 'plpgsql' volatile;
+
+
+--------------------------------------------------------------------------------
+
+create or replace function public.udf_template_sync_upsert_limit(v_rows int)
+returns text as
+$body$
+
+declare
+  v_del_cnt integer := 0;
+  v_ins_cnt integer := 0;
+  v_up_cnt integer := 0;
+
+  v_min_ts timestamp;
+  v_max_ts timestamp;
+  v_start_ts timestamp;
+  v_end_ts timestamp;
+
+  v_result text;
+  v_err_msg text;
+  v_cdc_del_cnt integer := 0;
+
+begin
+
+  v_start_ts := clock_timestamp();
+
+  select min(ts), max(ts) into v_min_ts, v_max_ts
+    from (
+          select ts
+            from public.template_stg
+           order by ts
+           limit v_rows
+         ) a ;
+
+  raise notice '%' , '1';
+
+  delete from public.template_target a
+   using public.template_stg b
+   where a.id = b.id
+     and b.cud_fg = 'D'
+     and b.ts >= v_min_ts
+     and b.ts <= v_max_ts;
+
+  get diagnostics v_del_cnt = ROW_COUNT ;
+
+  raise notice '%' , '2';
+
+  insert into public.template_target (id,c1,c2,c3,ts)
+  with tmp as
+  (
+  select *
+    from (
+          select id,c1,c2,c3,ts,cud_fg,row_number() over (partition by id order by ts desc) rnk
+            from public.template_stg a
+           where a.cud_fg in ('I','D')
+             and ts >= v_min_ts
+             and ts <= v_max_ts
+          ) a
+    where cud_fg = 'I'
+      and rnk = 1
+  )
+  select a.id, a.c1, a.c2, a.c3, a.ts
+    from tmp a
+    left outer join public.template_target b
+      on a.id = b.id
+   where b.id is null;
+
+  get diagnostics v_ins_cnt = ROW_COUNT ;
+
+  raise notice '%' , '3';
+
+  with tmp as
+  (
+  select *
+    from (
+          select id,c1,c2,c3,ts,cud_fg,row_number() over (partition by id order by ts desc) rnk
+            from public.template_stg a
+           where a.cud_fg in ('U','I','D')
+             and ts>= v_min_ts
+             and ts <= v_max_ts
+         ) a
+   where rnk=1
+     and cud_fg ='U'
+  )
+  update public.template_target a
+  set
+      c1 = b.c1,
+      c2 = b.c2,
+      c3 = b.c3,
+      ts = b.ts
+  from tmp b
+  where a.id = b.id;
+
+  get diagnostics v_up_cnt = ROW_COUNT ;
+
+  raise notice '%' , '4';
+
+  v_end_ts := clock_timestamp();
+
+  delete from public.template_stg
+   where ts >= v_min_ts
+     and ts <= v_max_ts;
+
+  get diagnostics v_cdc_del_cnt = ROW_COUNT ;
+
+  v_result := 'start: '  || to_char(v_start_ts,'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'end: '    || to_char(v_end_ts,  'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'rows: '   || trim(to_char(v_cdc_del_cnt,'99,999,999,999')) || ', ' ||
+              'delete: ' || trim(to_char(v_del_cnt,    '99,999,999,999')) || ', ' ||
+              'insert: ' || trim(to_char(v_ins_cnt,    '99,999,999,999')) || ', ' ||
+              'update: ' || trim(to_char(v_up_cnt,     '99,999,999,999')) ;
+
+  raise notice '%' , v_result;
+
+  return v_result;
+
+  exception
+  when others then
+       v_err_msg := sqlerrm;
+       raise notice 'error_msg : %', v_err_msg;
+  return sqlerrm;
+
+end;
+$body$
+language 'plpgsql' volatile;
+

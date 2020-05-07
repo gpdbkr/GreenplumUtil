@@ -1,0 +1,1 @@
+psql -ec "select count(*) from rptadm.durable ;" pocdb

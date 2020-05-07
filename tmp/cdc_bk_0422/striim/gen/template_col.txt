@@ -1,0 +1,11 @@
+P lot_hold_id
+P hold_tm
+C wf_cnt
+C release_operator_user_id
+C owner_fab_id
+C hold_stat_cd
+C fab_id
+C crt_user_id
+C crt_tm
+C chg_user_id
+C chg_tm

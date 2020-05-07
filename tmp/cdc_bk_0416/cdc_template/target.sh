@@ -1,0 +1,1 @@
+psql -ec "select * from public.template_target order by 1,5;" pocdb

@@ -1,0 +1,1 @@
+psql -ec "select * from public.cdc_log order by 1,5;" -d pocdb

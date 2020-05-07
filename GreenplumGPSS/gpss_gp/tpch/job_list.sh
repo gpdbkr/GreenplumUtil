@@ -1,0 +1,2 @@
+gpsscli list --all 
+ 

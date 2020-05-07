@@ -1,0 +1,1 @@
+gpsscli stop $1

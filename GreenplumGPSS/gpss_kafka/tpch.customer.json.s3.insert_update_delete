@@ -1,0 +1,10 @@
+{ "metadata": {"gpss_fg":"I",  "gpss_ts":"2020-04-29 16:17:37.977019+09" },   "data":{"c_custkey": "1", "c_name": "Customer#000000001", "c_address": "j5JsirBM9PsCy0O1m", "c_nationkey": "15", "c_phone": "25-989-741-2988", "c_acctbal": "711.56", "c_mktsegment": "BUILDING", "c_comment": "op#1"}  } 
+{ "metadata": {"gpss_fg":"I",  "gpss_ts":"2020-04-29 16:17:37.977029+09" },   "data":{"c_custkey": "2", "c_name": "Customer#000000002", "c_address": "487LW1dovn6Q4dMVymKwwLE9OKf3QG", "c_nationkey": "13", "c_phone": "23-768-687-3665", "c_acctbal": "121.65", "c_mktsegment": "AUTOMOBILE", "c_comment": "op#1"}  } 
+{ "metadata": {"gpss_fg":"U",  "gpss_ts":"2020-04-29 16:17:37.97703+09" },   "data":{"c_custkey": "2", "c_comment": "op#2"}  } 
+{ "metadata": {"gpss_fg":"I",  "gpss_ts":"2020-04-29 16:17:37.977039+09" },   "data":{"c_custkey": "3", "c_name": "Customer#000000003", "c_address": "fkRGN8nY4pkE", "c_nationkey": "1", "c_phone": "11-719-748-3364", "c_acctbal": "7498.12", "c_mktsegment": "AUTOMOBILE", "c_comment": "op#1"}  } 
+{ "metadata": {"gpss_fg":"U",  "gpss_ts":"2020-04-29 16:17:37.97704+09" },   "data":{"c_custkey": "3", "c_comment": "op#2"}  } 
+{ "metadata": {"gpss_fg":"D",  "gpss_ts":"2020-04-29 16:17:37.977041+09" },   "data":{"c_custkey": "3", "c_comment": "op#3"}  } 
+{ "metadata": {"gpss_fg":"I",  "gpss_ts":"2020-04-29 16:17:37.977049+09" },   "data":{"c_custkey": "4", "c_name": "Customer#000000004", "c_address": "4u58h fqkyE", "c_nationkey": "4", "c_phone": "14-128-190-5944", "c_acctbal": "2866.83", "c_mktsegment": "MACHINERY", "c_comment": "op#1"}  } 
+{ "metadata": {"gpss_fg":"U",  "gpss_ts":"2020-04-29 16:17:37.97705+09" },   "data":{"c_custkey": "4", "c_comment": "op#2"}  } 
+{ "metadata": {"gpss_fg":"D",  "gpss_ts":"2020-04-29 16:17:37.977051+09" },   "data":{"c_custkey": "4", "c_comment": "op#3"}  } 
+{ "metadata": {"gpss_fg":"I",  "gpss_ts":"2020-04-29 16:17:37.977059+09" },   "data":{"c_custkey": "5", "c_name": "Customer#000000005", "c_address": "hwBtxkoBF qSW4KrIk5U 2B1AU7H", "c_nationkey": "3", "c_phone": "13-750-942-6364", "c_acctbal": "794.47", "c_mktsegment": "HOUSEHOLD", "c_comment": "op#1"}  } 

@@ -26,12 +26,12 @@ DATABASE: ${DBNAME}
 USER: ${USERNAME}
 HOST: ${HOST}
 PORT: ${PORT}
-KAFKA
+KAFKA:
    INPUT:
      SOURCE:
        BROKERS: ${BROKERS} 
        TOPIC: $TOPIC
-     COLUMN:
+     COLUMNS:
         - NAME: j
           TYPE: json
      FORMAT: json
@@ -77,10 +77,10 @@ cat << + >> $OUT_YAML
         - NAME: gpss_fg
           EXPRESSION: gpss.json2text (j,'gpss_fg')
    COMMIT:
-      MINIMAL_INTERNAL: 1000
+      MINIMAL_INTERVAL: 1000
    TASK:
       POST_BATCH_SQL: select ${UDF_NAME}();
-      BATCH_INTERNAL: 1
+      BATCH_INTERVAL: 1
 +
 
 echo

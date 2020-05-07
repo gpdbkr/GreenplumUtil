@@ -1,0 +1,2 @@
+cat json_template_stg_1.json
+{ "id": 1, "c1": "A", "c2": "A", "c3": "A", "ts": "2020-04-09 11:32:20.540394", "cud_fg": "I" }

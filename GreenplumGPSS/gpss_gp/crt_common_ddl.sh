@@ -20,7 +20,8 @@ create table gpss.gpss_udf_exec_log
 )
 distributed randomly;
 
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_text(v_val jsonb, v_key text)
+
+CREATE OR REPLACE FUNCTION gpss.json_get_text(v_val json, v_key text)
 RETURNS text AS
 $BODY$
 DECLARE
@@ -39,8 +40,8 @@ BEGIN
 EXCEPTION
 WHEN others THEN
        v_err_msg := sqlerrm;
-	   RAISE NOTICE 'ERROR_MSG : %' , v_err_msg;
-return sqlerrm;
+       RAISE NOTICE 'ERROR_MSG : %' , v_err_msg;
+       return sqlerrm;
 
 END;
 $BODY$
@@ -48,7 +49,7 @@ LANGUAGE 'plpgsql' immutable;
 
 
 
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_num(v_val jsonb, v_key text)
+CREATE OR REPLACE FUNCTION gpss.json_get_num(v_val json, v_key text)
 RETURNS numeric AS
 $BODY$
 DECLARE
@@ -73,7 +74,7 @@ $BODY$
 LANGUAGE 'plpgsql' immutable;
 
 
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_ts(v_val jsonb, v_key text)
+CREATE OR REPLACE FUNCTION gpss.json_get_ts(v_val json, v_key text)
 RETURNS timestamp AS
 $BODY$
 DECLARE
@@ -98,15 +99,46 @@ $BODY$
 LANGUAGE 'plpgsql' immutable;
 
 
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_text_meta(v_val text, v_c1 text, v2 text)
-RETURNS numeric AS
-$BODY$
+CREATE OR REPLACE FUNCTION gpss.json_get_ts_meta(v_val json,v_c1 text,v_c2 text)
+	RETURNS timestamp
+	LANGUAGE plpgsql
+	IMMUTABLE
+AS $function$ 	
 DECLARE
 
 		v_tmp	 		text;
 		v_err_msg		text;
 BEGIN
-		v_tmp := ((substr(v_val, 2, length(v_val)-2)::json)-v_c1->v_c2)::text;
+		v_tmp := (v_val->v_c1->v_c2)::text;
+
+	    if v_tmp = 'null' then
+		   return null;
+		else
+		   return to_timestamp(replace(v_tmp, '"', ''),'yyyy-mm-dd hh24:mi:ss.us')::timestamp;
+		end if;
+
+EXCEPTION
+WHEN others THEN
+       v_err_msg := sqlerrm;
+	   RAISE NOTICE 'ERROR_MSG : %' , v_err_msg;      
+       return v_err_msg;
+
+END;
+ $function$
+EXECUTE ON ANY;
+
+
+CREATE OR REPLACE FUNCTION gpss.json_get_text_meta(v_val json,v_c1 text,v2 text)
+	RETURNS numeric
+	LANGUAGE plpgsql
+	IMMUTABLE
+AS $function$ 	
+DECLARE
+
+		v_tmp	 		text;
+		v_err_msg		text;
+BEGIN
+		v_tmp := (v_val->v_c1->v_c2)::text;
 
 
 	    if v_tmp = 'null' then
@@ -122,59 +154,6 @@ WHEN others THEN
 return sqlerrm;
 
 END;
-$BODY$
-LANGUAGE 'plpgsql' immutable;
+ $function$
+EXECUTE ON ANY;
 
-
-
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_ts_meta(v_val text, v_c1 text, v2 text)
-RETURNS numeric AS
-$BODY$
-DECLARE
-
-		v_tmp	 		text;
-		v_err_msg		text;
-BEGIN
-		v_tmp := ((substr(v_val, 2, length(v_val)-2)::json)-v_c1->v_c2)::text;
-
-	    if v_tmp = 'null' then
-		   return null;
-		else
-		   return to_timestamp(replace(substr(v_tmp, 2, length(v_tmp)-2), '"', ''),'yyyy-mm-dd hh24:mi:ss.us')::timestamp;
-		end if;
-
-EXCEPTION
-WHEN others THEN
-       return null;
-
-END;
-$BODY$
-LANGUAGE 'plpgsql' immutable;
-
-
-CREATE OR REPLACE FUNCTION gpss.jsonb2_get_num_meta(v_val text, v_c1 text, v2 text)
-RETURNS numeric AS
-$BODY$
-DECLARE
-
-		v_tmp	 		text;
-		v_err_msg		text;
-BEGIN
-		v_tmp := ((substr(v_val, 2, length(v_val)-2)::json)-v_c1->v_c2)::text;
-
-
-	    if v_tmp = 'null' then
-		   return null;
-		else
-		   return (replace(v_tmp, '"', ''))::numeric;
-		end if;
-
-EXCEPTION
-WHEN others THEN
-     return null;
-
-END;
-$BODY$
-LANGUAGE 'plpgsql' VOLATILE;
-
-+

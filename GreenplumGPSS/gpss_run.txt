@@ -1,0 +1,54 @@
+cat tpch.customer.json | egrep "op#1" | head -n 10 > tpch.customer.json.s1.insert
+cat tpch.customer.json | egrep "op#1|op#2" | head -n 10 > tpch.customer.json.s2.insert_update
+cat tpch.customer.json | egrep "op#1|op#2|op#3" | head -n 10 > tpch.customer.json.s3.insert_update_delete
+cat tpch.customer.json | egrep "op#1|op#2|op#3|op#4" | head -n 10 > tpch.customer.json.s4.insert_update_delete_insert
+cat tpch.customer.json | egrep "op#1|op#2|op#3|op#4|op#5" | head -n 20 > tpch.customer.json.s5.insert_update_delete_insert_multi_update
+cat tpch.customer.json | egrep "op#1|op#6|op#7" | head -n 10 > tpch.customer.json.s5.insert_1update_1update
+
+
+
+
+Kafka
+
+list 
+/usr/local/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092
+
+
+delete
+/usr/local/kafka/bin/kafka-topics.sh --delete --bootstrap-server localhost:9092 --force --topic tpch.customer 
+
+load
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s1.insert
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s2.insert_update
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s3.insert_update_delete
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s4.insert_update_delete_insert
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s5.insert_update_delete_insert_multi_update
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic tpch.customer < tpch.customer.json.s6.insert_1update_1update
+
+
+show
+/usr/local/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic tpch.customer --from-beginning
+
+
+
+GPDB
+
+gpsscli stop tpch.customer
+
+gpsscli remove tpch.customer
+
+gpsscli submit --name tpch.customer ./yaml/tpch.customer.yaml
+
+gpsscli start tpch.customer --force-reset-earliest
+
+gpsscli list --all
+
+gpsscli progress tpch.customer
+
+
+while true; do date; ./chk.sh ; sleep 2; done

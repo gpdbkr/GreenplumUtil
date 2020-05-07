@@ -1,0 +1,1 @@
+psql -c "select count(*) from striim.cms_im_lothold_his_ic_stg;" -d pocdb

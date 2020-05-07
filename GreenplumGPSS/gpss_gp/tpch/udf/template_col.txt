@@ -1,0 +1,8 @@
+P c_custkey
+C c_name
+C c_address
+C c_nationkey
+C c_phone
+C c_acctbal
+C c_mktsegment
+C c_comment

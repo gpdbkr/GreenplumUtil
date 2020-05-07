@@ -1,0 +1,29 @@
+DATABASE: gpssdb
+USER: gpadmin
+HOST: mdw
+PORT: 5432
+KAFKA:
+   INPUT:
+     SOURCE:
+       BROKERS: 172.16.25.227:9092 
+       TOPIC: tpch.customer
+     COLUMNS:
+        - NAME: j
+          TYPE: json
+     FORMAT: json
+     ERROR_LIMIT: 10
+   OUTPUT:
+     SCHEMA: gpss_stg
+     TABLE: tmp_tpch_customer
+     MAPPING:
+        - NAME: m
+          EXPRESSION: j->'metadata'
+        - NAME: d
+          EXPRESSION: j->'data'
+        - NAME: gpss_ts
+          EXPRESSION: gpss.json_get_ts_meta (j,'metadata','gpss_ts')
+   COMMIT:
+      MINIMAL_INTERVAL: 1000
+   TASK:
+      POST_BATCH_SQL: select gpss_stg.udf_sync_tpch_customer();
+      BATCH_INTERVAL: 1

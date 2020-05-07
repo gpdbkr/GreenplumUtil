@@ -1,0 +1,1 @@
+gpsscli remove jstemplate
