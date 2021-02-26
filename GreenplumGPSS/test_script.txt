@@ -1,0 +1,563 @@
+
+### Table and Procedure for CDC test
+create schema gpss_test;
+-- Source Table for checking the DML
+drop table if exists gpss_test.tb_demo_cud_src;
+create table gpss_test.tb_demo_cud_src
+(
+	id int,
+	c1 varchar(20),
+	c2 varchar(20),
+	c3 varchar(20),
+	gpss_ts timestamp
+)
+distributed by (id);
+alter table gpss_test.tb_demo_cud_src add constraint pk_tb_demo_cud_src primary key (id);
+
+-- Stage Table for CDC
+-- Put into gpss_test.tb_demo_cud_stg from kafka message via gpss
+drop table if exists gpss_test.tb_demo_cud_stg;
+create table gpss_test.tb_demo_cud_stg
+(
+	id int,
+	c1 varchar(20),
+	c2 varchar(20),
+	c3 varchar(20),
+	gpss_ts timestamp,
+  gpss_fg varchar(20)
+)
+distributed by (id);
+
+-- Target Table
+drop table if exists gpss_test.tb_demo_cud_target;
+create table gpss_test.tb_demo_cud_target
+(
+	id int,
+	c1 varchar(20),
+	c2 varchar(20),
+	c3 varchar(20),
+	gpss_ts timestamp
+)
+distributed by (id);
+alter table gpss_test.tb_demo_cud_target add constraint pk_tb_demo_cud_target primary key (id);
+
+
+-- Procedure for managing DMLs
+drop function if exists gpss_test.udf_sync_gpss_test_tb_demo_cud_update();
+create or replace function gpss_test.udf_sync_gpss_test_tb_demo_cud_update()
+returns text as
+$$
+
+declare
+  v_del_cnt integer := 0;
+  v_ins_cnt integer := 0;
+  v_up_cnt  integer := 0;
+
+  v_min_ts   timestamp;
+  v_max_ts   timestamp;
+  v_start_ts timestamp;
+  v_end_ts   timestamp;
+
+  v_result      text;
+  v_err_msg     text;
+  v_cdc_del_cnt integer := 0;
+
+begin
+  v_start_ts := clock_timestamp();
+
+  select min(gpss_ts), max(gpss_ts)
+    into v_min_ts, v_max_ts
+    from gpss_test.tb_demo_cud_stg;
+
+  delete from gpss_test.tb_demo_cud_target a
+   using gpss_test.tb_demo_cud_stg b
+   where a.id = b.id
+     and b.gpss_fg = 'D'
+     and b.gpss_ts >= v_min_ts
+     and b.gpss_ts <= v_max_ts;
+
+  get diagnostics v_del_cnt = ROW_COUNT ;
+
+  insert into gpss_test.tb_demo_cud_target (id,c1,c2,c3,gpss_ts)
+  with tmp as
+  (
+  select *
+    from (
+          select id,c1,c2,c3,gpss_ts,gpss_fg,row_number() over (partition by id order by gpss_ts desc) rnk
+            from gpss_test.tb_demo_cud_stg a
+           where a.gpss_fg in ('I','D')
+             and gpss_ts  >= v_min_ts
+             and gpss_ts <= v_max_ts
+         ) a
+   where gpss_fg = 'I'
+     and rnk = 1
+  )
+  select a.id, a.c1, a.c2, a.c3, a.gpss_ts
+    from tmp a
+    left outer join gpss_test.tb_demo_cud_target b
+      on a.id = b.id
+   where b.id is null;
+
+  get diagnostics v_ins_cnt = ROW_COUNT ;
+
+  with tmp as
+  (
+  select *
+    from (
+          select id, max(c1) c1, max(c2) c2, max(c3) c3, max(gpss_ts) gpss_ts
+            from (
+                  select id
+                       , last_value(c1) over (partition by id order by case when c1 is not null then 1 else 0 end asc, gpss_ts rows between unbounded preceding and unbounded following) c1
+                       , last_value(c2) over (partition by id order by case when c2 is not null then 1 else 0 end asc, gpss_ts rows between unbounded preceding and unbounded following) c2
+                       , last_value(c3) over (partition by id order by case when c3 is not null then 1 else 0 end asc, gpss_ts rows between unbounded preceding and unbounded following) c3
+                       , last_value(gpss_ts) over (partition by id order by gpss_ts rows between unbounded preceding and unbounded following) gpss_ts
+                    from gpss_test.tb_demo_cud_stg a
+                   where a.gpss_fg in  ('U','I')
+                     and gpss_ts >= v_min_ts
+                     and gpss_ts <= v_max_ts
+                 ) a
+           group by id
+         ) tmp
+  )
+  update gpss_test.tb_demo_cud_target a
+  set
+      c1 = coalesce(b.c1,a.c1),
+      c2 = coalesce(b.c2,a.c2),
+      c3 = coalesce(b.c3,a.c3),
+      gpss_ts = coalesce(b.gpss_ts,a.gpss_ts)
+  from tmp b
+  where a.id = b.id
+  and   (
+               a.c1 <> b.c1
+           or  a.c2 <> b.c2
+           or  a.c3 <> b.c3
+           or  a.gpss_ts <> b.gpss_ts
+        )
+
+  ;
+
+  get diagnostics v_up_cnt = ROW_COUNT ;
+
+  v_end_ts := clock_timestamp();
+
+  delete from gpss_test.tb_demo_cud_stg
+   where gpss_ts >= v_min_ts
+     and gpss_ts <= v_max_ts;
+
+  get diagnostics v_cdc_del_cnt = ROW_COUNT ;
+
+  v_result := 'start: '  || to_char(v_start_ts,'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'end: '    || to_char(v_end_ts,  'yyyy-mm-dd hh24:mi:ss')   || ', ' ||
+              'rows: '   || trim(to_char(v_cdc_del_cnt,'99,999,999,999')) || ', ' ||
+              'delete: ' || trim(to_char(v_del_cnt,    '99,999,999,999')) || ', ' ||
+              'insert: ' || trim(to_char(v_ins_cnt,    '99,999,999,999')) || ', ' ||
+              'update: ' || trim(to_char(v_up_cnt,     '99,999,999,999')) ;
+
+  raise notice '%' , v_result;
+
+  return v_result;
+
+  exception
+  when others then
+       v_err_msg := sqlerrm;
+       raise notice 'error_msg : %', v_err_msg;
+       return sqlerrm;
+
+end;
+$$
+language 'plpgsql' volatile;
+
+
+### Yaml for Kafka message
+[gpadmin@mdw tb_demo_cud]$ vi tb_demo_cud.yaml
+DATABASE: gpssdb
+USER: gpadmin
+HOST: mdw
+PORT: 5432
+KAFKA:
+   INPUT:
+     SOURCE:
+        BROKERS: kafka:9092
+        TOPIC: gpss_test.tb_demo_cud
+     COLUMNS:
+        - NAME: j
+          TYPE: json
+     FORMAT: json
+     ERROR_LIMIT: 10
+   OUTPUT:
+     SCHEMA: gpss_test
+     TABLE: tb_demo_cud_stg
+     MAPPING:
+        - NAME: id
+          EXPRESSION: (j->>'id')::int
+        - NAME: c1
+          EXPRESSION: (j->>'c1')::text
+        - NAME: c2
+          EXPRESSION: (j->>'c2')::text
+        - NAME: c3
+          EXPRESSION: (j->>'c3')::text
+        - NAME: gpss_ts
+          EXPRESSION: (to_timestamp((j->>'gpss_ts')::text, 'yyyy-mm-dd hh24:mi:ss.us'))::timestamp
+        - NAME: gpss_fg
+          EXPRESSION: (j->>'gpss_fg')::text
+   COMMIT:
+     MINIMAL_INTERVAL: 1000
+   TASK:
+      POST_BATCH_SQL: select gpss_test.udf_sync_gpss_test_tb_demo_cud_update();
+      BATCH_INTERVAL: 1
+[gpadmin@mdw tb_demo_cud]$
+
+      
+### The result of DML Querys 
+
+[gpadmin@mdw tb_demo_cud]$ cat run_tb_demo_cud_src.sh
+if [ $# -ne 1 ] ; then
+  echo "Usage : " $0 "seq"
+  exit
+fi
+psql -ef tb_demo_cud_src_$1.sql
+[gpadmin@mdw tb_demo_cud]$ sh run_tb_demo_cud_src.sh 1
+Timing is on.
+truncate table gpss_test.tb_demo_cud_src;
+TRUNCATE TABLE
+Time: 42.479 ms
+insert into gpss_test.tb_demo_cud_src values (1, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 61.874 ms
+insert into gpss_test.tb_demo_cud_src values (2, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 16.527 ms
+insert into gpss_test.tb_demo_cud_src values (3, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 9.174 ms
+update gpss_test.tb_demo_cud_src set c1 = 'B', c2 = 'B', c3 = 'B' where id =1 ;
+UPDATE 1
+Time: 19.251 ms
+update gpss_test.tb_demo_cud_src set c1 = 'B', c2 = 'B', c3 = 'B' where id =2 ;
+UPDATE 1
+Time: 8.862 ms
+update gpss_test.tb_demo_cud_src set c1 = 'B', c2 = 'B', c3 = 'B' where id =3 ;
+UPDATE 1
+Time: 8.651 ms
+delete from gpss_test.tb_demo_cud_src where id = 1;
+DELETE 1
+Time: 7.620 ms
+insert into gpss_test.tb_demo_cud_src values (1, 'A1', 'A1', 'A1', now());
+INSERT 0 1
+Time: 5.687 ms
+update gpss_test.tb_demo_cud_src set c1 = 'C', c2 = 'C', c3 = 'C' where id =2 ;
+UPDATE 1
+Time: 7.281 ms
+insert into gpss_test.tb_demo_cud_src values (4, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 4.722 ms
+delete from gpss_test.tb_demo_cud_src where id = 4;
+DELETE 1
+Time: 7.792 ms
+insert into gpss_test.tb_demo_cud_src values (4, 'A1', 'A1', 'A1', now());
+INSERT 0 1
+Time: 5.877 ms
+delete from gpss_test.tb_demo_cud_src where id = 4;
+DELETE 1
+Time: 6.746 ms
+insert into gpss_test.tb_demo_cud_src values (5, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 7.303 ms
+delete from gpss_test.tb_demo_cud_src where id = 5;
+DELETE 1
+Time: 10.447 ms
+insert into gpss_test.tb_demo_cud_src values (5, 'A1', 'A1', 'A1', now());
+INSERT 0 1
+Time: 5.701 ms
+insert into gpss_test.tb_demo_cud_src values (6, 'A', 'A', 'A', now());
+INSERT 0 1
+Time: 4.949 ms
+update gpss_test.tb_demo_cud_src set c1 = 'B', c2 = 'B', c3 = 'B' where id =6 ;
+UPDATE 1
+Time: 11.524 ms
+update gpss_test.tb_demo_cud_src set c1 = 'C', c2 = 'C', c3 = 'C' where id =6 ;
+UPDATE 1
+Time: 6.851 ms
+update gpss_test.tb_demo_cud_src set c1 = 'D', c2 = 'D', c3 = 'D' where id =6 ;
+UPDATE 1
+Time: 8.364 ms
+select * from gpss_test.tb_demo_cud_src order by 1;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-05-07 11:31:03.242149
+  2 | C  | C  | C  | 2020-05-07 11:31:03.171978
+  3 | B  | B  | B  | 2020-05-07 11:31:03.188391
+  5 | A1 | A1 | A1 | 2020-05-07 11:31:03.29835
+  6 | D  | D  | D  | 2020-05-07 11:31:03.304073
+(5 rows)
+
+Time: 5.809 ms
+[gpadmin@mdw tb_demo_cud]$
+
+### Kafka Side
+
+[gpadmin@kafka gpss_kafka]$ cat create_topic.sh
+if [ $# -ne 1 ] ; then
+  echo "Usage : " $0 "topicname"
+  exit
+fi
+/usr/local/kafka/bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic $1
+
+[gpadmin@kafka gpss_kafka]$ ./create_topic.sh gpss_test.tb_demo_cud
+
+[gpadmin@kafka gpss_kafka]$ ./list_topic.sh
+__consumer_offsets
+gpss_test.tb_demo_cud
+[gpadmin@kafka gpss_kafka]$
+[gpadmin@kafka gpss_kafka]$ cat json_tb_demo_cud_stg_1.json
+{ "id": 1, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.952612", "gpss_fg": "I" }
+{ "id": 2, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.980917", "gpss_fg": "I" }
+{ "id": 3, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.991201", "gpss_fg": "I" }
+{ "id": 1, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:14.997264", "gpss_fg": "U" }
+{ "id": 2, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.003286", "gpss_fg": "U" }
+{ "id": 3, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.008165", "gpss_fg": "U" }
+{ "id": 1, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.014287", "gpss_fg": "D" }
+{ "id": 1, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.020102", "gpss_fg": "I" }
+{ "id": 2, "c1": "C", "c2": "C", "c3": "C", "gpss_ts": "2020-04-23 07:29:15.025156", "gpss_fg": "U" }
+{ "id": 4, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.030284", "gpss_fg": "I" }
+{ "id": 4, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.035373", "gpss_fg": "D" }
+{ "id": 4, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.040367", "gpss_fg": "I" }
+{ "id": 4, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.045686", "gpss_fg": "D" }
+{ "id": 5, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.051949", "gpss_fg": "I" }
+{ "id": 5, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.057793", "gpss_fg": "D" }
+{ "id": 5, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.063555", "gpss_fg": "I" }
+{ "id": 6, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.068745", "gpss_fg": "I" }
+{ "id": 6, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.073719", "gpss_fg": "U" }
+{ "id": 6, "c1": "C", "c2": "C", "c3": "C", "gpss_ts": "2020-04-23 07:29:15.078854", "gpss_fg": "U" }
+{ "id": 6, "c1": "D", "c2": "D", "c3": "D", "gpss_ts": "2020-04-23 07:29:15.08572", "gpss_fg": "U" }
+
+[gpadmin@kafka gpss_kafka]$ cat load_kafka.sh
+if [ $# -ne 2 ] ; then
+  echo "Usage : " $0 "topicname uploadfile"
+  exit
+fi
+
+/usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic $1 < $2
+[gpadmin@kafka gpss_kafka]$ /usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic gpss_test.tb_demo_cud < json_tb_demo_cud_stg_1.json
+>>>>>>>>>>>>>>>>>>>>>[gpadmin@kafka gpss_kafka]$
+[gpadmin@kafka gpss_kafka]$ cat show_kafka.sh
+if [ $# -ne 1 ] ; then
+  echo "Usage : " $0 "topicname "
+  exit
+fi
+/usr/local/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic $1  --from-beginning
+
+[gpadmin@kafka gpss_kafka]$ /usr/local/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic gpss_test.tb_demo_cud --from-beginning
+{ "id": 1, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.952612", "gpss_fg": "I" }
+{ "id": 2, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.980917", "gpss_fg": "I" }
+{ "id": 3, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:14.991201", "gpss_fg": "I" }
+{ "id": 1, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:14.997264", "gpss_fg": "U" }
+{ "id": 2, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.003286", "gpss_fg": "U" }
+{ "id": 3, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.008165", "gpss_fg": "U" }
+{ "id": 1, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.014287", "gpss_fg": "D" }
+{ "id": 1, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.020102", "gpss_fg": "I" }
+{ "id": 2, "c1": "C", "c2": "C", "c3": "C", "gpss_ts": "2020-04-23 07:29:15.025156", "gpss_fg": "U" }
+{ "id": 4, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.030284", "gpss_fg": "I" }
+{ "id": 4, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.035373", "gpss_fg": "D" }
+{ "id": 4, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.040367", "gpss_fg": "I" }
+{ "id": 4, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.045686", "gpss_fg": "D" }
+{ "id": 5, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.051949", "gpss_fg": "I" }
+{ "id": 5, "c1": null, "c2": null, "c3": null, "gpss_ts": "2020-04-23 07:29:15.057793", "gpss_fg": "D" }
+{ "id": 5, "c1": "A1", "c2": "A1", "c3": "A1", "gpss_ts": "2020-04-23 07:29:15.063555", "gpss_fg": "I" }
+{ "id": 6, "c1": "A", "c2": "A", "c3": "A", "gpss_ts": "2020-04-23 07:29:15.068745", "gpss_fg": "I" }
+{ "id": 6, "c1": "B", "c2": "B", "c3": "B", "gpss_ts": "2020-04-23 07:29:15.073719", "gpss_fg": "U" }
+{ "id": 6, "c1": "C", "c2": "C", "c3": "C", "gpss_ts": "2020-04-23 07:29:15.078854", "gpss_fg": "U" }
+{ "id": 6, "c1": "D", "c2": "D", "c3": "D", "gpss_ts": "2020-04-23 07:29:15.08572", "gpss_fg": "U" }
+^CProcessed a total of 20 messages
+[gpadmin@kafka gpss_kafka]$
+
+
+### submit GPSS job for kafka topic
+[gpadmin@mdw tb_demo_cud]$ cat job_submit.sh
+gpsscli submit --name  gpss_test.tb_demo_cud tb_demo_cud.yaml
+[gpadmin@mdw tb_demo_cud]$ gpsscli submit --name  gpss_test.tb_demo_cud tb_demo_cud.yaml
+20200507:17:38:09.153 gpsscli:gpadmin:mdw:111595-[INFO]:-JobID: gpss_test.tb_demo_cud
+[gpadmin@mdw tb_demo_cud]$ 
+[gpadmin@mdw tb_demo_cud]$ cat job_start.sh
+#gpsscli start gpss_test.tb_demo_cud
+gpsscli start gpss_test.tb_demo_cud --force-reset-earliest
+
+[gpadmin@mdw tb_demo_cud]$ gpsscli start gpss_test.tb_demo_cud --force-reset-earliest
+20200507:17:40:46.788 gpsscli:gpadmin:mdw:113214-[INFO]:-JobID: gpss_test.tb_demo_cud is started
+
+[gpadmin@mdw tb_demo_cud]$ cat job_list.sh
+gpsscli list --all
+[gpadmin@mdw tb_demo_cud]$ gpsscli list --all
+JobID                               GPHost          GPPort  DataBase        Schema          Table                           Topic           Status
+gpss_test.tb_demo_cud               mdw             5432    gpssdb          gpss_test       tb_demo_cud_stg                 gpss_test.tb_demo_cudRunning
+[gpadmin@mdw tb_demo_cud]$
+[gpadmin@mdw tb_demo_cud]$ cat chk.sh
+psql -e << +
+
+select 'gpss_test.tb_demo_cud_stg' tb_nm, count(*) from gpss_test.tb_demo_cud_stg;
+select 'gpss_test.tb_demo_cud_target' tb_nm, count(*) from gpss_test.tb_demo_cud_target;
+
+select * From gpss_test.tb_demo_cud_target order by id;
++
+[gpadmin@mdw tb_demo_cud]$ ./chk.sh
+Timing is on.
+select 'gpss_test.tb_demo_cud_stg' tb_nm, count(*) from gpss_test.tb_demo_cud_stg;
+           tb_nm           | count
+---------------------------+-------
+ gpss_test.tb_demo_cud_stg |     0
+(1 row)
+
+Time: 42.213 ms
+select 'gpss_test.tb_demo_cud_target' tb_nm, count(*) from gpss_test.tb_demo_cud_target;
+            tb_nm             | count
+------------------------------+-------
+ gpss_test.tb_demo_cud_target |     5
+(1 row)
+
+Time: 9.591 ms
+select * From gpss_test.tb_demo_cud_target order by id;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-04-23 07:29:15.020102
+  2 | C  | C  | C  | 2020-04-23 07:29:15.025156
+  3 | B  | B  | B  | 2020-04-23 07:29:15.008165
+  5 | A1 | A1 | A1 | 2020-04-23 07:29:15.063555
+  6 | D  | D  | D  | 2020-04-23 07:29:15.08572
+(5 rows)
+
+Time: 5.544 ms
+[gpadmin@mdw tb_demo_cud]$
+
+
+### Compraring of Step #1 
+1) the result of Source DML SQLs
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-05-07 11:31:03.242149
+  2 | C  | C  | C  | 2020-05-07 11:31:03.171978
+  3 | B  | B  | B  | 2020-05-07 11:31:03.188391
+  5 | A1 | A1 | A1 | 2020-05-07 11:31:03.29835
+  6 | D  | D  | D  | 2020-05-07 11:31:03.304073
+  
+2) the result of Target Table via GPSS
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-04-23 07:29:15.020102
+  2 | C  | C  | C  | 2020-04-23 07:29:15.025156
+  3 | B  | B  | B  | 2020-04-23 07:29:15.008165
+  5 | A1 | A1 | A1 | 2020-04-23 07:29:15.063555
+  6 | D  | D  | D  | 2020-04-23 07:29:15.08572
+
+### comparing of Step #2
+1) the result of Source DML SQLs
+[gpadmin@mdw tb_demo_cud]$ cat ./run_tb_demo_cud_src.sh
+if [ $# -ne 1 ] ; then
+  echo "Usage : " $0 "seq"
+  exit
+fi
+psql -ef tb_demo_cud_src_$1.sql
+[gpadmin@mdw tb_demo_cud]$ ./run_tb_demo_cud_src.sh 2
+insert into gpss_test.tb_demo_cud_src values (7, 'A', 'A', 'A', now());
+INSERT 0 1
+..
+..
+insert into gpss_test.tb_demo_cud_src values (3, 'C', 'C', 'C', now());
+INSERT 0 1
+Time: 3.756 ms
+
+select * from gpss_test.tb_demo_cud_src order by 1;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-05-07 11:31:03.242149
+  2 | D  | D  | D  | 2020-05-07 17:45:01.346009
+  3 | C  | C  | C  | 2020-05-07 17:45:01.375468
+  5 | D  | D  | D  | 2020-05-07 11:31:03.29835
+  6 | D  | D  | D  | 2020-05-07 11:31:03.304073
+  7 | B1 | B1 | B1 | 2020-05-07 17:45:01.332677
+  8 | C  | C  | C  | 2020-05-07 17:45:01.353683
+  9 | A  | A  | A  | 2020-05-07 17:45:01.214403
+ 10 | A  | A  | A  | 2020-05-07 17:45:01.303217
+(9 rows)
+
+2) the result of Target Table via GPSS
+## Kafka side
+[gpadmin@kafka gpss_kafka]$ /usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic gpss_test.tb_demo_cud < json_tb_demo_cud_stg_2.json
+>>>>>>>>>>>>>>>>>>>>>
+[gpadmin@kafka gpss_kafka]$
+
+## gpdb side
+[gpadmin@mdw tb_demo_cud]$ ./chk.sh
+Timing is on.
+select 'gpss_test.tb_demo_cud_stg' tb_nm, count(*) from gpss_test.tb_demo_cud_stg;
+           tb_nm           | count
+---------------------------+-------
+ gpss_test.tb_demo_cud_stg |     0
+(1 row)
+
+Time: 43.232 ms
+select 'gpss_test.tb_demo_cud_target' tb_nm, count(*) from gpss_test.tb_demo_cud_target;
+            tb_nm             | count
+------------------------------+-------
+ gpss_test.tb_demo_cud_target |     9
+(1 row)
+
+Time: 12.163 ms
+select * From gpss_test.tb_demo_cud_target order by id;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | A1 | A1 | A1 | 2020-04-23 07:29:15.020102
+  2 | D  | D  | D  | 2020-04-23 07:29:16.148773
+  3 | C  | C  | C  | 2020-04-23 07:29:16.159816
+  5 | D  | D  | D  | 2020-04-23 07:29:16.154807
+  6 | D  | D  | D  | 2020-04-23 07:29:15.08572
+  7 | B1 | B1 | B1 | 2020-04-23 07:29:16.124683
+  8 | C  | C  | C  | 2020-04-23 07:29:16.141121
+  9 | A  | A  | A  | 2020-04-23 07:29:16.036475
+ 10 | A  | A  | A  | 2020-04-23 07:29:16.101416
+(9 rows)
+
+Time: 7.190 ms
+[gpadmin@mdw tb_demo_cud]$
+
+
+### comparing of Step #3
+1) the result of Source DML SQLs
+[gpadmin@mdw tb_demo_cud]$ ./run_tb_demo_cud_src.sh 3
+select * from gpss_test.tb_demo_cud_src order by 1,5;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | B  | B  | B  | 2020-05-07 17:49:26.78824
+  2 | E  | E  | E  | 2020-05-07 17:45:01.346009
+  3 | C  | C  | C  | 2020-05-07 17:45:01.375468
+  7 | C  | C  | C  | 2020-05-07 17:49:26.799104
+  8 | D  | D  | D  | 2020-05-07 17:49:26.712866
+  9 | B  | B  | B  | 2020-05-07 17:45:01.214403
+ 10 | A  | A  | A  | 2020-05-07 17:45:01.303217
+ 11 | B  | B  | B  | 2020-05-07 17:49:26.843132
+ 13 | A  | A  | A  | 2020-05-07 17:49:26.793521
+ 14 | A  | A  | A  | 2020-05-07 17:49:26.782174
+(10 rows)
+
+2) the result of Target Table via GPSS
+## Kafka side
+[gpadmin@kafka gpss_kafka]$ /usr/local/kafka/bin/kafka-console-producer.sh --broker-list localhost:9092 --topic gpss_test.tb_demo_cud < json_tb_demo_cud_stg_3.json
+>>>>>>>>>>>>>>>>>>>>>
+[gpadmin@kafka gpss_kafka]$
+
+## gpdb side
+[gpadmin@mdw tb_demo_cud]$ ./chk.sh
+select * From gpss_test.tb_demo_cud_target order by id;
+ id | c1 | c2 | c3 |          gpss_ts
+----+----+----+----+----------------------------
+  1 | B  | B  | B  | 2020-04-23 07:29:16.448166
+  2 | E  | E  | E  | 2020-04-23 07:29:16.493121
+  3 | C  | C  | C  | 2020-04-23 07:29:16.482966
+  7 | C  | C  | C  | 2020-04-23 07:29:16.459521
+  8 | D  | D  | D  | 2020-04-23 07:29:16.371241
+  9 | B  | B  | B  | 2020-04-23 07:29:16.356659
+ 10 | A  | A  | A  | 2020-04-23 07:29:16.101416
+ 11 | B  | B  | B  | 2020-04-23 07:29:16.488126
+ 13 | A  | A  | A  | 2020-04-23 07:29:16.454191
+ 14 | A  | A  | A  | 2020-04-23 07:29:16.440938
+(10 rows)
+
