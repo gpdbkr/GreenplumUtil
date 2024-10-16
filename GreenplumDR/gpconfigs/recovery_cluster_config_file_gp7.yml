@@ -1,0 +1,73 @@
+# Recovery cluster configuration file example
+#
+# Example <recovery_cluster_config_file> for `gpdr configure restore --recovery-cluster-config-file <recovery_cluster_config_file> --config-file <config_file>`.
+#
+# The below example configuration would create a GPDB recovery cluster with the following details:
+# content | port |    host   | data_directory
+# --------------------------------------------
+#      -1 | 7000 | localhost |  /data/gpseg-1
+#       0 | 7002 | localhost |   /data/gpseg0
+#       1 | 7003 | localhost |   /data/gpseg1
+#       2 | 7004 | localhost |   /data/gpseg2
+#
+
+##################################################
+# General configurations
+##################################################
+
+# default GPDB Superuser (usually gpadmin)
+pguser: gpadmin
+
+# data directory name for the coordinator and primary segment instances
+#
+# Note: equivalent to SEG_PREFIX from gpinitsystem
+prefix: gpseg
+
+# number of expected segments to be restored
+#
+# Note: this should equal the number of segment_hosts multipied by the
+# number of data_directories (do not include the coordinator segment)
+num_segments: 4
+
+##################################################
+# Configurations for coordinator segment
+##################################################
+
+# coordinator segment hostname for the GPDB cluster
+#
+# Note: equivalent to COORDINATOR_HOSTNAME used by gpinitsystem
+coordinator_host: cdwdr
+
+# coordinator segment port
+#
+# Note: equivalent to COORDINATOR_PORT used by gpinitsystem
+coordinator_port: 5432
+
+# coordinator segment data directory
+#
+# Note: equivalent to COORDINATOR_DIRECTORY used by gpinitsystem
+coordinator_data_directory: /data/coordinator
+
+##################################################
+# Configurations for primary segments
+##################################################
+
+# primary segment hostname(s) for the GPDB cluster
+#
+# Note: similar to host file used by gpinitsystem
+segment_hosts:
+ - cdwdr
+
+# base port to start from for primary segment instances
+#
+# Note: equivalent to PORT_BASE used by gpinitsystem
+segment_port_base: 6000
+
+# primary segment data directory base location(s)
+#
+# Note: similar to `declare -a DATA_DIRECTORY` used by gpinitsystem
+data_directories:
+ - /data/primary
+ - /data/primary
+ - /data/primary
+ - /data/primary

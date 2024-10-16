@@ -1,0 +1,124 @@
+Greenplum Disaster Recovery 테스트를 위한 스크립트
+
+1. 파일 경로 및 설명
+   - Primary Cluster와 Recovery cluster에 동일 스크립트 적용
+   - 경로는 임의의 위치에서 수행해도 되나, 아래의 경로로 테스트 진행
+   [gpadmin@cdwdr gpdr]$ pwd
+   /data/poc/gpdr
+   [gpadmin@cdwdr gpdr]$ ls -la
+   0.1.gpdr_drop_backup.sh       ## 테스트하는 동안에 필요한 객체 삭제(초기화)
+   0.2.gpdr_drop_check.sql       ## 테스트 객체 삭제 점검
+   1.1.gpdr_full_backup.sql      ## heap/ao/replicated 테이블 생성 및 insert
+   1.2.gpdr_full_check.sql       ## 1.1의 테이블 건수 체크
+   2.1.gpdr_incr_backup.sql      ## 기존 테이블에 insert 및 pl/python 함수 생성
+   2.2.gpdr_incr_check.sql       ## 2.1의 테이블 건수 체크 및 함수 테스트
+   3.1.gpdr_cont_backup.sql      ## 기존 테이블에 insert 및 view 생성
+   3.2.gpdr_cont_check.sql       ## 3.1의 테이블 건수 체크 및 view 테스트 
+   [gpadmin@cdwdr gpdr]$
+
+2. 테스트 스크립트
+   - 테스트를 위한 스크립트는 ./gpdr 폴더에 위치
+
+   0) 오브젝트 초기화 - 반복 테스트하기 때문에 기존에 생성된 오브젝트 삭제  
+   
+   [gpadmin@cdw gpdr]$ cat  0.1.gpdr_drop_backup.sh
+   rm -f /usr/local/gpdr/configs/pgbackrest*.conf
+   psql <<EOF
+   drop table if exists public.gpdr_test_heap;
+   drop table if exists public.gpdr_test_ao;
+   drop table if exists public.gpdr_test_replicated;
+   drop table if exists public.gpdr_test_incr;
+   drop table if exists public.gpdr_test_cont;
+   
+   drop view if exists public.gpdr_view;
+   
+   drop extension plpython3u cascade;
+   drop function if exists public.gpdr_plpy3_bool(a int);
+   EOF
+   echo 
+   echo "If you have previously set the environment, you must delete the backup setting path of minio."
+   echo "In the current setting, you need to delete the /gpdr/data subdirectory of minio."
+   [gpadmin@cdw gpdr]$
+   
+   [gpadmin@cdw gpdr]$ cat 0.2.gpdr_drop_check.sql
+   \dt
+   \dv
+   \df
+   [gpadmin@cdw gpdr]$
+   
+   1) Full Recovery
+   
+   [gpadmin@cdw gpdr]$ cat 1.1.gpdr_full_backup.sql
+   create table public.gpdr_test_heap (id int, type text ) distributed by (id);
+   create table public.gpdr_test_ao (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+   create table public.gpdr_test_replicated (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by    (id);
+   
+   insert into public.gpdr_test_heap       select i, 'full_heap' from generate_series(1,100) i;
+   insert into public.gpdr_test_ao         select i, 'full_ao' from generate_series(1,100) i;
+   insert into public.gpdr_test_replicated select i, 'full_replicated' from generate_series(1,100) i;
+   
+   [gpadmin@cdw gpdr]$ cat 1.2.gpdr_full_check.sql
+   select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+   [gpadmin@cdw gpdr]$
+   
+   2) Incremental Recovery
+   
+   [gpadmin@cdw gpdr]$ cat 2.1.gpdr_incr_backup.sql
+   insert into public.gpdr_test_heap       select i, 'incr_heap' from generate_series(101,200) i;
+   insert into public.gpdr_test_ao         select i, 'incr_ao' from generate_series(101,200) i;
+   insert into public.gpdr_test_replicated select i, 'incr_replicated' from generate_series(101,200) i;
+   
+   create table public.gpdr_test_incr (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+   insert into  public.gpdr_test_incr select i, 'incr_ddl_dml' from generate_series(101,200) i;
+   
+   CREATE EXTENSION plpython3u;
+   CREATE OR REPLACE FUNCTION public.gpdr_plpy3_bool(a int) RETURNS boolean AS $$
+   # container: plc_python3_shared
+       if (a > 0):
+           return True
+       else:
+           return False
+   $$ LANGUAGE plpython3u;
+   
+   select public.gpdr_plpy3_bool(-1);
+   [gpadmin@cdw gpdr]$ 
+
+   [gpadmin@cdw gpdr]$ cat 2.2.gpdr_incr_check.sql
+   select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+   
+   select public.gpdr_plpy3_bool(-1);
+   [gpadmin@cdw gpdr]$
+   
+   3) Continuous Recovery
+   
+   [gpadmin@cdw gpdr]$ cat 3.1.gpdr_cont_backup.sql
+   insert into public.gpdr_test_heap       select i, 'cont_heap' from generate_series(201,300) i;
+   insert into public.gpdr_test_ao         select i, 'cont_ao' from generate_series(201,300) i;
+   insert into public.gpdr_test_replicated select i, 'cont_replicated' from generate_series(201,300) i;
+   
+   create table public.gpdr_test_cont (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+   insert into  public.gpdr_test_cont select i, 'cont_ddl_dml' from generate_series(201,300) i;
+   
+   create view public.gpdr_view as select * from public.gpdr_test_heap;
+   [gpadmin@cdw gpdr]$ 
+
+   [gpadmin@cdw gpdr]$ cat 3.2.gpdr_cont_check.sql
+   select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+   select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+   select type, count(*) cnt from public.gpdr_view            group by type order by type;
+   [gpadmin@cdw gpdr]$
+
+
+
+
+
+
+
+

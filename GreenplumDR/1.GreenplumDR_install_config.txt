@@ -1,0 +1,387 @@
+Greenplum Disaster Recovery
+
+Greenplum DR를 사용하면, 재해 발생 전 특정 복구 시점으로 복구 가능
+Greenplum DR은 Full 백업/복구, Incremental 백업/복구, WAL 로그 기반으로 DR 기능 제공
+스냅샷을 이용할 경우 PITR(Point-in-time-recovery) 수행 가능. 
+- 링크: https://docs.vmware.com/en/VMware-Greenplum-Disaster-Recovery/index.html
+
+Greenplum7.3+에서는 DR 클러스터에서 조회기능을 제공. (Greenplum 6에서는 미제공)
+
+1. GPDR 아키텍처
+
+GP Primary                  Repository                      GP Recovery 
+  Cluster                                                     Cluster
+            -------->       S3, NFS,            -------->  
+            Backup          AWS, GCP, Azure,    Restore
+            physical data   DataDomain          backups 
+            and             Local Filesystem    and WAL     
+            archive WAL
+
+2. GPDR 지원 버전
+   - VMware Greenplum 6.27.1 and higher for RHEL 7.x, 8.x, and 9.x
+   - VMware Greenplum 7.3.0 and later for RHEL 8.x and 9.x  
+      ==> Read replica(DR 조회기능)는 Greenplum 7.3 이후 지원   
+
+3. 전제 조건
+   - Greenplum Primary 및 Mirror 호스트들이 레퍼지토리에 접속 가능해야 함.
+   - Greenplum Major이 같아야 함. (GP6<->GP6, GP7<->GP7)
+   - OS 버전도 같아야 함. 
+   - Primary Cluster의 모든 Role/User에 대해서는 Recovery Cluster에 존재해야 함.(Role은 별도로 생성 필요)
+   - 확장 패키지에 대해서도 Recovery Cluster에 존재해야 함.(확장 패키지는 별도로 생성 필요)   
+
+4. 테스트 환경
+   - Greenplum 7.3 Primary Cluster (싱글머신)
+   - Greenplum 7.3 Recovery Cluster (싱글머신)
+   - minio (싱글머신)
+
+5. 서버 구성 
+  5.1 Greenplum 7 구성 
+      - Greenplum Primary Cluster
+         gpadmin=# select * from gp_segment_configuration ;
+          dbid | content | role | preferred_role | mode | status | port | hostname | address |          datadir
+         ------+---------+------+----------------+------+--------+------+----------+---------+---------------------------
+             1 |      -1 | p    | p              | n    | u      | 5432 | cdw      | cdw     | /data/coordinator/gpseg-1
+             2 |       0 | p    | p              | n    | u      | 6000 | cdw      | cdw     | /data/primary/gpseg0
+             3 |       1 | p    | p              | n    | u      | 6001 | cdw      | cdw     | /data/primary/gpseg1
+             4 |       2 | p    | p              | n    | u      | 6002 | cdw      | cdw     | /data/primary/gpseg2
+             5 |       3 | p    | p              | n    | u      | 6003 | cdw      | cdw     | /data/primary/gpseg3
+         (5 rows)
+       - Greenplum Recovery Cluster   
+         gpadmin=# select * from gp_segment_configuration ;
+          dbid | content | role | preferred_role | mode | status | port | hostname | address |          datadir
+         ------+---------+------+----------------+------+--------+------+----------+---------+---------------------------
+             1 |      -1 | p    | p              | n    | u      | 5432 | cdwdr    | cdwdr   | /data/coordinator/gpseg-1
+             2 |       0 | p    | p              | n    | u      | 6000 | cdwdr    | cdwdr   | /data/primary/gpseg0
+             3 |       1 | p    | p              | n    | u      | 6001 | cdwdr    | cdwdr   | /data/primary/gpseg1
+             4 |       2 | p    | p              | n    | u      | 6002 | cdwdr    | cdwdr   | /data/primary/gpseg2
+             5 |       3 | p    | p              | n    | u      | 6003 | cdwdr    | cdwdr   | /data/primary/gpseg3
+         (5 rows)
+
+   5.2 minio 설치
+     1) minio 설치 테스트 
+       - 정상 동작여부 확인, foreground에서 수행시 테스트하는 동안 불편 
+
+       [gpadmin@minio data]$ su -
+       암호:
+       마지막 로그인: 화  9월 24 17:45:46 KST 2024 일시 pts/0
+       [root@minio ~]# visudo
+       ### 아래 줄 추가
+       #------------------------------------------------------------------------------
+       # CUSTOMIZED OPTIONS
+       #------------------------------------------------------------------------------
+       gpadmin ALL=(ALL)       NOPASSWD: ALL
+       
+       [gpadmin@minio ~]$ sudo yum install wget -y
+       [gpadmin@minio ~]$ sudo dnf install minio.rpm
+       [gpadmin@minio ~]$ which minio
+       /usr/local/bin/minio
+       [gpadmin@minio ~]$ mkdir -p /data/minio
+       [gpadmin@minio ~]$ minio server /data/minio --console-address :9001
+       INFO: Formatting 1st pool, 1 set(s), 1 drives per set.
+       INFO: WARNING: Host local has more than 0 drives of set. A host failure will result in data becoming unavailable.
+       MinIO Object Storage Server
+       Copyright: 2015-2024 MinIO, Inc.
+       License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+       Version: RELEASE.2024-09-13T20-26-02Z (go1.22.7 linux/amd64)
+       
+       API: http://172.16.65.3:9000  http://127.0.0.1:9000
+          RootUser: minioadmin
+          RootPass: minioadmin
+       
+       WebUI: http://172.16.65.3:9001 http://127.0.0.1:9001
+         RootUser: minioadmin
+         RootPass: minioadmin
+     
+       CLI: https://min.io/docs/minio/linux/reference/minio-mc.html#quickstart
+       $ mc alias set 'myminio' 'http://172.16.65.3:9000' 'minioadmin' 'minioadmin'
+     
+       ^CINFO: Exiting on signal: INTERRUPT
+       [gpadmin@minio ~]$ ^C
+  
+    2) minio 구동 스크립트(background 수행)
+      - 스크립트 참조: https://oingdaddy.tistory.com/138
+      - minio 구동 스크립트 : minio 하위 폴더 start.sh/stop.sh 
+   
+      - 최종 경로 및 파일 리스트 
+      
+        [gpadmin@minio minio]$ ls -la
+        drwxrwxr-x 2 gpadmin gpadmin  49 Sep 30 11:07 logs       ##====> minio 서버 로그 
+        -rw-rw-r-- 1 gpadmin gpadmin   5 Sep 30 11:09 minio.pid  ##====> minio 프로세스 ID
+        -rwxrwxr-x 1 gpadmin gpadmin 336 Sep 30 11:05 start.sh   ##====> minio start 스크립트  
+        -rwxrwxr-x 1 gpadmin gpadmin 187 Sep 30 10:30 stop.sh    ##====> minio stop 스크립트  
+        [gpadmin@minio minio]$ 
+   
+      ##### 스크립트 
+      [gpadmin@minio minio]$ pwd
+      /data/minio
+      [gpadmin@minio minio]$ mkdir -p /data/minio/logs
+      [gpadmin@minio minio]$ vi start.sh
+      [gpadmin@minio minio]$ cat start.sh
+      #!/bin/bash
+      
+      LOG_FILE="$PWD/logs/minio.`/bin/date '+%Y%m%d'`.log"
+      
+      export MINIO_VOLUMES="/data/minio"
+      
+      export MINIO_ROOT_USER=minioadmin
+      export MINIO_ROOT_PASSWORD=minioadmin
+      
+      minio server --console-address :9001 $MINIO_VOLUMS  >> $LOG_FILE 2>&1 &
+      
+      MINIO_PID=$!
+      
+      if [ ! -z $MINIO_PID ] ; then
+           echo "$MINIO_PID" > minio.pid
+      fi
+                 [gpadmin@minio minio]$ cat stop.sh
+      #!/bin/bash
+      
+      MINIO_PID=`cat minio.pid 2> /dev/null`
+      
+      if [ ! -z $MINIO_PID ]; then
+          kill $MINIO_PID
+          rm -f minio.pid
+      else
+          echo "No MINIO processes are currently active."
+      fi
+          [gpadmin@minio minio]$ chmod +x start.sh stop.sh
+          
+      ##### minio 시작 
+      [gpadmin@minio minio]$ ./start.sh
+   
+      ##### Web UI 링크 접속 
+      http://172.16.65.3:9001
+   
+      ##### 프로세스 중지
+      [gpadmin@minio minio]$ ./stop.sh
+      [gpadmin@minio minio]$
+   
+      ##### minio 구동 로그 확인 
+      [gpadmin@minio minio]$ cat ./logs/minio.20240930.log
+      MinIO Object Storage Server
+      Copyright: 2015-2024 MinIO, Inc.
+      License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+      Version: RELEASE.2024-09-13T20-26-02Z (go1.22.7 linux/amd64)
+      
+      API: http://172.16.65.3:9000  http://127.0.0.1:9000
+      WebUI: http://172.16.65.3:9001 http://127.0.0.1:9001
+      ...
+
+
+6. Greenplum DR 설치 및 설정 요약
+
+DR Method  |    Primary Cluster       | Recovery Cluster     
+---------------------------------------------------------------------------------------------------------------             
+gpdr 설치 및 | gpdr rpm 설치             | gpdr rpm 설치 
+환경 설정    | gpdr_path.sh .bashrc에 추가| gpdr_path.sh .bashrc에 추가
+           | gpdr configure backup    | gpdr configure restore 
+           |    --config-file         | --config-file s3_config_file.yml 
+           |    s3_config_file.yml    | --recovery-cluster-config-file 
+           |                          |   recovery_cluster_config_file_gp7.yml
+--------------------------------------------------------------------------------------------------------------             
+Full       | gpdr backup --type full  | 
+Recovery   | gpdr gpdr info backup    | 
+           |                          | gpdr restore --type full --restore-point { <restore_point> | latest }
+           |                          | gpdr promote
+           |                          | gpstart -a           
+           |                          | psql - 쿼리 수행 가능            
+--------------------------------------------------------------------------------------------------------------             
+Incremental| gpdr backup --type incr  | 
+Recovery   | psql - DDL/DML           | 
+           |                          | gpdr restore --type incr --restore-point { <restore_point> | latest }
+           |                          | gpdr promote
+           |                          | gpstart -a
+           |                          | psql - 쿼리 수행 가능           
+--------------------------------------------------------------------------------------------------------------                          
+Continuous | gpdr backup --type full  | 
+Recovery   |                          | gpdr restore --type incr --restore-point { <restore_point> | latest }
+           |                          | gpdr read-replica enable
+           |                          | gpstart -a 
+           |                          | psql - 쿼리 수행 가능
+           | DDL/DML(1)               | 
+           | gpdr create-restore-point| 
+           |                          | gpdr restore -t continuous --restore-point { <restore_point> | latest }
+           |                          | psql - DDL/DML(1)에 쿼리 수행 가능            
+--------------------------------------------------------------------------------------------------------------              
+      
+7. Greenplum DR 설치 및 구성
+   1) 설치 메뉴얼 
+      - https://docs.vmware.com/en/VMware-Greenplum-Disaster-Recovery/1.2/greenplum-disaster-recovery/GUID-installing_gpdr.html 
+   
+   2) greenplum  Primary 및 DR Cluster에 패키지 설치
+      - 테스트 환경에서는 싱글머신이기 때문에 싱글머신에만 설치하지만, 클러스터의 경우 모든 호스트에 설치
+      - 설치, 권한, .bashrc 모두 모든 호스트에 설정 
+      - greenplum-disaster-recovery-1.2.0-2.el8.x86_64.rpm 설치 
+      [gpadmin@cdwdr setup]$ sudo yum install greenplum-disaster-recovery-1.2.0-2.el8.x86_64.rpm -y
+      [gpadmin@cdwdr setup]$ ls -la /usr/local/gpdr
+      [gpadmin@cdwdr setup]$ sudo chown -R gpadmin:gpadmin /usr/local/gpdr
+      [gpadmin@cdwdr setup]$ echo 'source /usr/local/gpdr/gpdr_path.sh' >> ~/.bashrc
+      [gpadmin@cdwdr setup]$ tail -n 1 ~/.bashrc
+      source /usr/local/gpdr/gpdr_path.sh
+      [gpadmin@cdwdr setup]$
+
+   3) Configure the Primary Cluster
+      - 설정 예제파일은 github ./gpconfigs 하위 폴더의 파일 참조
+        * s3_config_file.yml 
+        * recovery_cluster_config_file_gp7.yml
+
+      [gpadmin@r8g7 templates]$ cp /usr/local/gpdr/templates/s3_config_file.yml /home/gpadmin/gpconfigs/s3_config_file.yml
+      [gpadmin@r8g7 templates]$ cd ~/gpconfigs/
+      [gpadmin@r8g7 gpconfigs]$ vi /home/gpadmin/gpconfigs/s3_config_file.yml
+      [gpadmin@r8g7 gpconfigs]$ cat /home/gpadmin/gpconfigs/s3_config_file.yml
+      # GPDR configuration file example for S3 based repository
+      #
+      # Example for AWS S3 and S3-compatible object stores (e.g. MinIO).
+      
+      ##################################################
+      # Required configurations
+      ##################################################
+      
+      # the type of storage used for the repository
+      type: s3
+      
+      # absolute path to where backups and archives will be stored in the
+      # S3 bucket
+      path: /data
+      
+      # S3 repository region where the bucket was created
+      s3_region: us-west-2
+      
+      # S3 repository endpoint for the selected S3 region
+      #s3_endpoint: s3.gpdb.kr:9000
+      s3_endpoint: 172.16.65.3
+      
+      # S3 bucket used for the repository
+      s3_bucket: gpdr
+      
+      # S3 ID to access the S3 bucket location
+      s3_key: minioadmin
+      
+      # S3 passcode for the S3 ID to access the S3 bucket location
+      s3_key_secret: minioadmin
+      
+      ##################################################
+      # Optional configurations
+      ##################################################
+      
+      # host - Connect to bucket.endpoint host (default)
+      # path - Connect to endpoint host and prepend bucket to URIs
+      s3_uri_style: path
+      
+      # Enable/disable verification of the storage server TLS certificate
+      # y - Verify storage server TLS certificate (default)
+      # n - Disable storage server TLS certificate verification
+      storage_verify_tls: n
+      
+      # Storage server port (e.g. MinIO server port)
+      storage_port: 9000
+      [gpadmin@r8g7 templates]$
+      [gpadmin@r8g7 templates]$ source ~/.bashrc
+      [gpadmin@r8g7 templates]$ gpdr configure backup --config-file s3_config_file.yml
+      20240930:15:15:37 gpdr:gpadmin:r8g7:073090-[INFO]:-Configuring for backup
+      20240930:15:15:38 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully created pgbackrest configuration files for backup at /usr/local/gpdr/configs for the GPDB primary cluster
+      20240930:15:15:38 gpdr:gpadmin:r8g7:073090-[INFO]:-Creating pgbackrest stanzas for the GPDB primary cluster
+      20240930:15:15:40 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully created stanzas for the GPDB primary cluster
+      20240930:15:15:40 gpdr:gpadmin:r8g7:073090-[INFO]:-Configuring GPDB GUCs
+      20240930:15:18:01 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully configured GPDB GUCs and enabled WAL archiving
+      20240930:15:18:06 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully finished configuration steps for backup
+      [gpadmin@r8g7 templates]$
+
+   4) Configure the Disaster Recovery Cluster
+      
+      [gpadmin@cdwdr ~]$ scp gpadmin@cdw:/home/gpadmin/gpconfigs/s3_config_file.yml ~/gpconfigs/
+
+      [gpadmin@cdwdr ~]$ cd /usr/local/gpdr/templates/
+      [gpadmin@cdwdr templates]$ cp recovery_cluster_config_file_gp7.yml ~/gpconfigs/recovery_cluster_config_file_gp7.yml
+      [gpadmin@cdwdr templates]$ cd ~/gpconfigs
+      [gpadmin@cdwdr gpconfigs]$ vi recovery_cluster_config_file_gp7.yml
+      [gpadmin@cdwdr gpconfigs]$ cat recovery_cluster_config_file_gp7.yml
+      # Recovery cluster configuration file example
+      #
+      # Example <recovery_cluster_config_file> for `gpdr configure restore --recovery-cluster-config-file <recovery_cluster_config_file> --config-file <config_file>`.
+      #
+      # The below example configuration would create a GPDB recovery cluster with the following details:
+      # content | port |    host   | data_directory
+      # --------------------------------------------
+      #      -1 | 7000 | localhost |  /data/gpseg-1
+      #       0 | 7002 | localhost |   /data/gpseg0
+      #       1 | 7003 | localhost |   /data/gpseg1
+      #       2 | 7004 | localhost |   /data/gpseg2
+      #
+      
+      ##################################################
+      # General configurations
+      ##################################################
+      
+      # default GPDB Superuser (usually gpadmin)
+      pguser: gpadmin
+      
+      # data directory name for the coordinator and primary segment instances
+      #
+      # Note: equivalent to SEG_PREFIX from gpinitsystem
+      prefix: gpseg
+      
+      # number of expected segments to be restored
+      #
+      # Note: this should equal the number of segment_hosts multipied by the
+      # number of data_directories (do not include the coordinator segment)
+      num_segments: 4
+      
+      ##################################################
+      # Configurations for coordinator segment
+      ##################################################
+      
+      # coordinator segment hostname for the GPDB cluster
+      #
+      # Note: equivalent to COORDINATOR_HOSTNAME used by gpinitsystem
+      #coordinator_host: localhost
+      coordinator_host: cdwdr
+      
+      # coordinator segment port
+      #
+      # Note: equivalent to COORDINATOR_PORT used by gpinitsystem
+      #coordinator_port: 7000
+      coordinator_port: 5432
+      
+      # coordinator segment data directory
+      #
+      # Note: equivalent to COORDINATOR_DIRECTORY used by gpinitsystem
+      #coordinator_data_directory: /data
+      coordinator_data_directory: /data/coordinator
+      
+      ##################################################
+      # Configurations for primary segments
+      ##################################################
+      
+      # primary segment hostname(s) for the GPDB cluster
+      #
+      # Note: similar to host file used by gpinitsystem
+      segment_hosts:
+       - cdwdr
+      
+      # base port to start from for primary segment instances
+      #
+      # Note: equivalent to PORT_BASE used by gpinitsystem
+      segment_port_base: 6000
+      
+      # primary segment data directory base location(s)
+      #
+      # Note: similar to `declare -a DATA_DIRECTORY` used by gpinitsystem
+      data_directories:
+       - /data/primary
+       - /data/primary
+       - /data/primary
+       - /data/primary
+      [gpadmin@cdwdr gpconfigs]$
+      [gpadmin@cdwdr gpconfigs]$ gpdr configure restore --config-file /home/gpadmin/gpconfigs/s3_config_file.yml --recovery-cluster-config-file /home/gpadmin/gpconfigs/recovery_cluster_config_file_gp7.yml
+      20240930:16:45:19 gpdr:gpadmin:cdwdr:092693-[INFO]:-Configuring restore
+      20240930:16:45:20 gpdr:gpadmin:cdwdr:092693-[INFO]:-Successfully created pgbackrest configuration files for restore at /usr/local/gpdr/configs for the GPDB recovery cluster
+      20240930:16:45:20 gpdr:gpadmin:cdwdr:092693-[INFO]:-Successfully finished configuration steps for restore
+      [gpadmin@cdwdr gpconfigs]$
+
+
+
+
+
+
+

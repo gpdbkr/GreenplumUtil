@@ -1,0 +1,48 @@
+# GPDR configuration file example for S3 based repository
+#
+# Example for AWS S3 and S3-compatible object stores (e.g. MinIO).
+
+##################################################
+# Required configurations
+##################################################
+
+# the type of storage used for the repository
+type: s3
+
+# absolute path to where backups and archives will be stored in the
+# S3 bucket
+path: /data
+
+# S3 repository region where the bucket was created
+s3_region: us-west-2
+
+# S3 repository endpoint for the selected S3 region
+#s3_endpoint: s3.gpdb.kr:9000
+s3_endpoint: 172.16.65.3
+
+# S3 bucket used for the repository
+s3_bucket: gpdr
+
+# S3 ID to access the S3 bucket location
+s3_key: minioadmin
+
+# S3 passcode for the S3 ID to access the S3 bucket location
+s3_key_secret: minioadmin
+
+##################################################
+# Optional configurations
+##################################################
+
+# host - Connect to bucket.endpoint host (default)
+# path - Connect to endpoint host and prepend bucket to URIs
+#s3_uri_style: host
+s3_uri_style: path
+
+# Enable/disable verification of the storage server TLS certificate
+# y - Verify storage server TLS certificate (default)
+# n - Disable storage server TLS certificate verification
+#storage_verify_tls: y
+storage_verify_tls: n
+
+# Storage server port (e.g. MinIO server port)
+storage_port: 9000

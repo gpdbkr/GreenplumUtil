@@ -1,0 +1,1584 @@
+Greenplum Disaster Recovery
+
+Greenplum DR를 사용하면, 재해 발생 전 특정 복구 시점으로 복구 가능
+Greenplum DR은 WAL 로그 기반으로 기능 제공
+Database 클러스터 파일의 Full 또는 증분 백업을 할 수 있으며, PITR(Point-in-time-recovery) 수행가능함. 
+- 링크: https://docs.vmware.com/en/VMware-Greenplum-Disaster-Recovery/index.html
+
+
+1. GPDR 아키텍처
+
+GP Primary                  Repository                      GP Recovery 
+  Cluster                                                     Cluster
+            -------->       S3, NFS,            -------->  
+            Backup          AWS, GCP, Azure,    Restore
+            physical data   DataDomain          backups 
+            and             Local Filesystem    and WAL     
+            archive WAL
+
+2. GPDR 지원 버전
+   - VMware Greenplum 6.27.1 and higher for RHEL 7.x, 8.x, and 9.x
+   - VMware Greenplum 7.3.0 and later for RHEL 8.x and 9.x  
+      ==> Read replica는 Greenplum 7.3 이후 지원   
+
+3. 전제 조건
+   - Greenplum Primary 및 Mirror 호스트들이 레퍼지토리에 접속 가능해야 함.
+   - Greenplum Major이 같아야 함. (GP6<->GP6, GP7<->GP7)
+   - OS 버전도 같아야 함. 
+   - Primary Cluster의 모든 Role/User에 대해서는 Recovery Cluster에 존재해야 함.(Role은 별도로 생성 필요)
+   - 확장 패키지에 대해서도 Recovery Cluster에 존재해야 함.(확장 패키지는 별도로 생성 필요)   
+
+4. 테스트 환경
+   - Greenplum 7.3 Primary Cluster (싱글머신)
+   - Greenplum 7.3 Recovery Cluster (싱글머신)
+   - minio (싱글머신)
+
+5. 설치
+   1) Greenplum 7 설치 
+      - Greenplum Primary Cluster
+         gpadmin=# select * from gp_segment_configuration ;
+          dbid | content | role | preferred_role | mode | status | port | hostname | address |          datadir
+         ------+---------+------+----------------+------+--------+------+----------+---------+---------------------------
+             1 |      -1 | p    | p              | n    | u      | 5432 | cdw      | cdw     | /data/coordinator/gpseg-1
+             2 |       0 | p    | p              | n    | u      | 6000 | r8g7     | cdw     | /data/primary/gpseg0
+             3 |       1 | p    | p              | n    | u      | 6001 | r8g7     | cdw     | /data/primary/gpseg1
+             4 |       2 | p    | p              | n    | u      | 6002 | r8g7     | cdw     | /data/primary/gpseg2
+             5 |       3 | p    | p              | n    | u      | 6003 | r8g7     | cdw     | /data/primary/gpseg3
+         (5 rows)
+       - Greenplum Recovery Cluster   
+         gpadmin=# select * from gp_segment_configuration ;
+          dbid | content | role | preferred_role | mode | status | port | hostname | address |          datadir
+         ------+---------+------+----------------+------+--------+------+----------+---------+---------------------------
+             1 |      -1 | p    | p              | n    | u      | 5432 | cdwdr    | cdwdr   | /data/coordinator/gpseg-1
+             2 |       0 | p    | p              | n    | u      | 6000 | cdwdr    | cdwdr   | /data/primary/gpseg0
+             3 |       1 | p    | p              | n    | u      | 6001 | cdwdr    | cdwdr   | /data/primary/gpseg1
+             4 |       2 | p    | p              | n    | u      | 6002 | cdwdr    | cdwdr   | /data/primary/gpseg2
+             5 |       3 | p    | p              | n    | u      | 6003 | cdwdr    | cdwdr   | /data/primary/gpseg3
+         (5 rows)
+
+   2) minio 환경 구성
+      (1) 기본 테스트 
+          - 정상 동작여부 확인, foreground에서 수행하여 좀 불편 
+      [gpadmin@minio data]$ su -
+      암호:
+      마지막 로그인: 화  9월 24 17:45:46 KST 2024 일시 pts/0
+      [root@minio ~]# visudo
+      ### 아래 줄 추가
+      #------------------------------------------------------------------------------
+      # CUSTOMIZED OPTIONS
+      #------------------------------------------------------------------------------
+      gpadmin ALL=(ALL)       NOPASSWD: ALL
+      
+      [gpadmin@minio ~]$ sudo yum install wget -y
+      [gpadmin@minio ~]$ sudo dnf install minio.rpm
+      [gpadmin@minio ~]$ which minio
+      /usr/local/bin/minio
+      [gpadmin@minio ~]$ mkdir -p /data/minio
+      [gpadmin@minio ~]$ minio server /data/minio --console-address :9001
+      INFO: Formatting 1st pool, 1 set(s), 1 drives per set.
+      INFO: WARNING: Host local has more than 0 drives of set. A host failure will result in data becoming unavailable.
+      MinIO Object Storage Server
+      Copyright: 2015-2024 MinIO, Inc.
+      License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+      Version: RELEASE.2024-09-13T20-26-02Z (go1.22.7 linux/amd64)
+      
+      API: http://172.16.65.3:9000  http://127.0.0.1:9000
+         RootUser: minioadmin
+         RootPass: minioadmin
+      
+      WebUI: http://172.16.65.3:9001 http://127.0.0.1:9001
+        RootUser: minioadmin
+        RootPass: minioadmin
+
+      CLI: https://min.io/docs/minio/linux/reference/minio-mc.html#quickstart
+      $ mc alias set 'myminio' 'http://172.16.65.3:9000' 'minioadmin' 'minioadmin'
+
+      ^CINFO: Exiting on signal: INTERRUPT
+      [gpadmin@minio ~]$ ^C
+      
+      (2) 스크립트로 background 수행
+           - 스크립트 참조: https://oingdaddy.tistory.com/138
+           - 최종 경로 및 파일 리스트 
+           [gpadmin@minio minio]$ ls -la
+           drwxrwxr-x 2 gpadmin gpadmin  49 Sep 30 11:07 logs       ##====> minio 서버 로그 
+           -rw-rw-r-- 1 gpadmin gpadmin   5 Sep 30 11:09 minio.pid  ##====> minio 프로세스 ID
+           -rwxrwxr-x 1 gpadmin gpadmin 336 Sep 30 11:05 start.sh   ##====> minio start 스크립트  
+           -rwxrwxr-x 1 gpadmin gpadmin 187 Sep 30 10:30 stop.sh    ##====> minio stop 스크립트  
+           [gpadmin@minio minio]$ 
+
+           - 스크립트 
+           [gpadmin@minio minio]$ pwd
+           /data/minio
+           [gpadmin@minio minio]$ mkdir -p /data/minio/logs
+           [gpadmin@minio minio]$ vi start.sh
+#!/bin/bash
+
+LOG_FILE="$PWD/logs/minio.`/bin/date '+%Y%m%d'`.log"
+
+export MINIO_VOLUMES="/data/minio"
+
+export MINIO_ROOT_USER=minioadmin
+export MINIO_ROOT_PASSWORD=minioadmin
+
+minio server --console-address :9001 $MINIO_VOLUMS  >> $LOG_FILE 2>&1 &
+
+MINIO_PID=$!
+
+if [ ! -z $MINIO_PID ] ; then
+     echo "$MINIO_PID" > minio.pid
+fi
+           [gpadmin@minio minio]$ cat stop.sh
+#!/bin/bash
+
+MINIO_PID=`cat minio.pid 2> /dev/null`
+
+if [ ! -z $MINIO_PID ]; then
+    kill $MINIO_PID
+    rm -f minio.pid
+else
+    echo "No MINIO processes are currently active."
+fi
+           [gpadmin@minio minio]$ chmod +x start.sh stop.sh
+           
+           - minio 시작 
+           [gpadmin@minio minio]$ ./start.sh
+
+           - Web UI 링크 접속 
+             http://172.16.65.3:9001
+
+           - 프로세스 중지
+          [gpadmin@minio minio]$ ./stop.sh
+          [gpadmin@minio minio]$
+
+           - minio 구동 로그 확인 
+          [gpadmin@minio minio]$ cat ./logs/minio.20240930.log
+          MinIO Object Storage Server
+          Copyright: 2015-2024 MinIO, Inc.
+          License: GNU AGPLv3 - https://www.gnu.org/licenses/agpl-3.0.html
+          Version: RELEASE.2024-09-13T20-26-02Z (go1.22.7 linux/amd64)
+          
+          API: http://172.16.65.3:9000  http://127.0.0.1:9000
+          WebUI: http://172.16.65.3:9001 http://127.0.0.1:9001
+          ...
+
+          - 
+
+###############################################################################################################
+6. Greenplum DR 설치 및 설정 Flow
+
+DR Method  |    Primary Cluster       | Recovery Cluster     
+---------------------------------------------------------------------------------------------------------------             
+gpdr 설치 및 | gpdr rpm 설치             | gpdr rpm 설치 
+환경 설정    | gpdr_path.sh .bashrc에 추가 | gpdr_path.sh .bashrc 추가
+           | gpdr configure backup    | gpdr configure restore 
+           |    --config-file         | --config-file s3_config_file.yml 
+           |    s3_config_file.yml    | --recovery-cluster-config-file 
+           |                          |   recovery_cluster_config_file_gp7.yml
+--------------------------------------------------------------------------------------------------------------             
+Full       | gpdr backup --type full  | 
+Recovery   | gpdr gpdr info backup    | 
+           |                          | gpdr restore --type full --restore-point { <restore_point> | latest }
+           |                          | gpdr promote
+           |                          | gpstart -a           
+           |                          | psql - 쿼리 수행 가능            
+--------------------------------------------------------------------------------------------------------------             
+Incremental| gpdr backup --type incr  | 
+Recovery   | psql - DDL/DML           | 
+           |                          | gpdr restore --type incr --restore-point { <restore_point> | latest }
+           |                          | gpdr promote
+           |                          | gpstart -a
+           |                          | psql - 쿼리 수행 가능           
+--------------------------------------------------------------------------------------------------------------                          
+Continuous | gpdr backup --type full  | 
+Recovery   |                          | gpdr restore --type incr --restore-point { <restore_point> | latest }
+           |                          | gpdr read-replica enable
+           |                          | gpstart -a 
+           |                          | psql - 쿼리 수행 가능
+           | DDL/DML(1)               | 
+           | gpdr create-restore-point| 
+           |                          | gpdr restore -t continuous --restore-point { <restore_point> | latest }
+           |                          | psql - DDL/DML(1)에 쿼리 수행 가능            
+--------------------------------------------------------------------------------------------------------------              
+      
+
+###############################################################################################################
+7. Greenplum DR 설치 및 구성
+   1) 설치 메뉴얼 
+      - https://docs.vmware.com/en/VMware-Greenplum-Disaster-Recovery/1.2/greenplum-disaster-recovery/GUID-installing_gpdr.html 
+   2) greenplum  Primary 및 DR Cluster에 패키지 설치
+      - 테스트 환경에서는 싱글머신이기 때문에 싱글머신에만 설치하지만, 클러스터의 경우 모든 호스트에 설치
+      - 설치, 권한, .bashrc 모두 모든 호스트에 설정 
+      - greenplum-disaster-recovery-1.2.0-2.el8.x86_64.rpm 설치 
+      [gpadmin@cdwdr setup]$ sudo yum install greenplum-disaster-recovery-1.2.0-2.el8.x86_64.rpm -y
+      [gpadmin@cdwdr setup]$ ls -la /usr/local/gpdr
+      [gpadmin@cdwdr setup]$ sudo chown -R gpadmin:gpadmin /usr/local/gpdr
+      [gpadmin@cdwdr setup]$ echo 'source /usr/local/gpdr/gpdr_path.sh' >> ~/.bashrc
+      [gpadmin@cdwdr setup]$ tail -n 1 ~/.bashrc
+      source /usr/local/gpdr/gpdr_path.sh
+      [gpadmin@cdwdr setup]$
+   3) Configure the Primary Cluster
+      [gpadmin@r8g7 templates]$ cp /usr/local/gpdr/templates/s3_config_file.yml /home/gpadmin/gpconfigs/s3_config_file.yml
+      [gpadmin@r8g7 templates]$ cd ~/gpconfigs/
+      [gpadmin@r8g7 gpconfigs]$ vi /home/gpadmin/gpconfigs/s3_config_file.yml
+      [gpadmin@r8g7 gpconfigs]$ cat /home/gpadmin/gpconfigs/s3_config_file.yml
+      [gpadmin@r8g7 gpconfigs]$ cat s3_config_file.yml
+      # GPDR configuration file example for S3 based repository
+      #
+      # Example for AWS S3 and S3-compatible object stores (e.g. MinIO).
+      
+      ##################################################
+      # Required configurations
+      ##################################################
+      
+      # the type of storage used for the repository
+      type: s3
+      
+      # absolute path to where backups and archives will be stored in the
+      # S3 bucket
+      path: /data
+      
+      # S3 repository region where the bucket was created
+      s3_region: us-west-2
+      
+      # S3 repository endpoint for the selected S3 region
+      #s3_endpoint: s3.gpdb.kr:9000
+      s3_endpoint: 172.16.65.3
+      
+      # S3 bucket used for the repository
+      s3_bucket: gpdr
+      
+      # S3 ID to access the S3 bucket location
+      s3_key: minioadmin
+      
+      # S3 passcode for the S3 ID to access the S3 bucket location
+      s3_key_secret: minioadmin
+      
+      ##################################################
+      # Optional configurations
+      ##################################################
+      
+      # host - Connect to bucket.endpoint host (default)
+      # path - Connect to endpoint host and prepend bucket to URIs
+      s3_uri_style: path
+      
+      # Enable/disable verification of the storage server TLS certificate
+      # y - Verify storage server TLS certificate (default)
+      # n - Disable storage server TLS certificate verification
+      storage_verify_tls: n
+      
+      # Storage server port (e.g. MinIO server port)
+      storage_port: 9000
+      [gpadmin@r8g7 templates]$
+      [gpadmin@r8g7 templates]$ source ~/.bashrc
+      [gpadmin@r8g7 templates]$ gpdr configure backup --config-file s3_config_file.yml
+      20240930:15:15:37 gpdr:gpadmin:r8g7:073090-[INFO]:-Configuring for backup
+      20240930:15:15:38 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully created pgbackrest configuration files for backup at /usr/local/gpdr/configs for the GPDB primary cluster
+      20240930:15:15:38 gpdr:gpadmin:r8g7:073090-[INFO]:-Creating pgbackrest stanzas for the GPDB primary cluster
+      20240930:15:15:40 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully created stanzas for the GPDB primary cluster
+      20240930:15:15:40 gpdr:gpadmin:r8g7:073090-[INFO]:-Configuring GPDB GUCs
+      20240930:15:18:01 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully configured GPDB GUCs and enabled WAL archiving
+      20240930:15:18:06 gpdr:gpadmin:r8g7:073090-[INFO]:-Successfully finished configuration steps for backup
+      [gpadmin@r8g7 templates]$
+
+   4) Configure the Disaster Recovery Cluster
+[gpadmin@cdwdr ~]$ cp cdw:/home/gpadmin/gpconfigs/s3_config_file.yml ~/gpconfigs/
+[gpadmin@cdwdr ~]$ cd /usr/local/gpdr/templates/
+[gpadmin@cdwdr templates]$ cp recovery_cluster_config_file_gp7.yml ~/gpconfigs/recovery_cluster_config_file_gp7.yml
+[gpadmin@cdwdr templates]$ cd ~/gpconfigs
+[gpadmin@cdwdr gpconfigs]$ vi recovery_cluster_config_file_gp7.yml
+[gpadmin@cdwdr gpconfigs]$ cat recovery_cluster_config_file_gp7.yml
+# Recovery cluster configuration file example
+#
+# Example <recovery_cluster_config_file> for `gpdr configure restore --recovery-cluster-config-file <recovery_cluster_config_file> --config-file <config_file>`.
+#
+# The below example configuration would create a GPDB recovery cluster with the following details:
+# content | port |    host   | data_directory
+# --------------------------------------------
+#      -1 | 7000 | localhost |  /data/gpseg-1
+#       0 | 7002 | localhost |   /data/gpseg0
+#       1 | 7003 | localhost |   /data/gpseg1
+#       2 | 7004 | localhost |   /data/gpseg2
+#
+
+##################################################
+# General configurations
+##################################################
+
+# default GPDB Superuser (usually gpadmin)
+pguser: gpadmin
+
+# data directory name for the coordinator and primary segment instances
+#
+# Note: equivalent to SEG_PREFIX from gpinitsystem
+prefix: gpseg
+
+# number of expected segments to be restored
+#
+# Note: this should equal the number of segment_hosts multipied by the
+# number of data_directories (do not include the coordinator segment)
+num_segments: 4
+
+##################################################
+# Configurations for coordinator segment
+##################################################
+
+# coordinator segment hostname for the GPDB cluster
+#
+# Note: equivalent to COORDINATOR_HOSTNAME used by gpinitsystem
+#coordinator_host: localhost
+coordinator_host: cdwdr
+
+# coordinator segment port
+#
+# Note: equivalent to COORDINATOR_PORT used by gpinitsystem
+#coordinator_port: 7000
+coordinator_port: 5432
+
+# coordinator segment data directory
+#
+# Note: equivalent to COORDINATOR_DIRECTORY used by gpinitsystem
+#coordinator_data_directory: /data
+coordinator_data_directory: /data/coordinator
+
+##################################################
+# Configurations for primary segments
+##################################################
+
+# primary segment hostname(s) for the GPDB cluster
+#
+# Note: similar to host file used by gpinitsystem
+segment_hosts:
+ - cdwdr
+
+# base port to start from for primary segment instances
+#
+# Note: equivalent to PORT_BASE used by gpinitsystem
+segment_port_base: 6000
+
+# primary segment data directory base location(s)
+#
+# Note: similar to `declare -a DATA_DIRECTORY` used by gpinitsystem
+data_directories:
+ - /data/primary
+ - /data/primary
+ - /data/primary
+ - /data/primary
+[gpadmin@cdwdr gpconfigs]$
+[gpadmin@cdwdr gpconfigs]$ gpdr configure restore --config-file /home/gpadmin/gpconfigs/s3_config_file.yml --recovery-cluster-config-file /home/gpadmin/gpconfigs/recovery_cluster_config_file_gp7.yml
+20240930:16:45:19 gpdr:gpadmin:cdwdr:092693-[INFO]:-Configuring restore
+20240930:16:45:20 gpdr:gpadmin:cdwdr:092693-[INFO]:-Successfully created pgbackrest configuration files for restore at /usr/local/gpdr/configs for the GPDB recovery cluster
+20240930:16:45:20 gpdr:gpadmin:cdwdr:092693-[INFO]:-Successfully finished configuration steps for restore
+[gpadmin@cdwdr gpconfigs]$
+
+###############################################################################################################
+8. Greenplum disaster recovery 테스트 스크립트
+0) 초기화 스크립트 - Primary & Recovery cluster
+[gpadmin@cdw gpdr]$ cat  0.1.gpdr_drop_backup.sh
+rm -f /usr/local/gpdr/configs/pgbackrest*.conf
+psql <<EOF
+drop table if exists public.gpdr_test_heap;
+drop table if exists public.gpdr_test_ao;
+drop table if exists public.gpdr_test_replicated;
+drop table if exists public.gpdr_test_incr;
+drop table if exists public.gpdr_test_cont;
+
+drop view if exists public.gpdr_view;
+
+drop extension plpython3u cascade;
+drop function if exists public.gpdr_plpy3_bool(a int);
+EOF
+echo 
+echo "If you have previously set the environment, you must delete the backup setting path of minio."
+echo "In the current setting, you need to delete the /gpdr/data subdirectory of minio."
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ cat 0.2.gpdr_drop_check.sql
+\dt
+\dv
+\df
+[gpadmin@cdw gpdr]$
+
+1) Full Recovery
+[gpadmin@cdw gpdr]$ cat 1.1.gpdr_full_backup.sql
+create table public.gpdr_test_heap (id int, type text ) distributed by (id);
+create table public.gpdr_test_ao (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+create table public.gpdr_test_replicated (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+
+insert into public.gpdr_test_heap       select i, 'full_heap' from generate_series(1,100) i;
+insert into public.gpdr_test_ao         select i, 'full_ao' from generate_series(1,100) i;
+insert into public.gpdr_test_replicated select i, 'full_replicated' from generate_series(1,100) i;
+
+[gpadmin@cdw gpdr]$ cat 1.2.gpdr_full_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+[gpadmin@cdw gpdr]$
+
+2) Incremental Recovery
+
+[gpadmin@cdw gpdr]$ cat 2.1.gpdr_incr_backup.sql
+insert into public.gpdr_test_heap       select i, 'incr_heap' from generate_series(101,200) i;
+insert into public.gpdr_test_ao         select i, 'incr_ao' from generate_series(101,200) i;
+insert into public.gpdr_test_replicated select i, 'incr_replicated' from generate_series(101,200) i;
+
+create table public.gpdr_test_incr (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+insert into  public.gpdr_test_incr select i, 'incr_ddl_dml' from generate_series(101,200) i;
+
+CREATE EXTENSION plpython3u;
+CREATE OR REPLACE FUNCTION public.gpdr_plpy3_bool(a int) RETURNS boolean AS $$
+# container: plc_python3_shared
+    if (a > 0):
+        return True
+    else:
+        return False
+$$ LANGUAGE plpython3u;
+
+select public.gpdr_plpy3_bool(-1);
+[gpadmin@cdw gpdr]$ cat 2.2.gpdr_incr_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+
+select public.gpdr_plpy3_bool(-1);
+[gpadmin@cdw gpdr]$
+
+3) Continuous Recovery
+
+[gpadmin@cdw gpdr]$ cat 3.1.gpdr_cont_backup.sql
+insert into public.gpdr_test_heap       select i, 'cont_heap' from generate_series(201,300) i;
+insert into public.gpdr_test_ao         select i, 'cont_ao' from generate_series(201,300) i;
+insert into public.gpdr_test_replicated select i, 'cont_replicated' from generate_series(201,300) i;
+
+create table public.gpdr_test_cont (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+insert into  public.gpdr_test_cont select i, 'cont_ddl_dml' from generate_series(201,300) i;
+
+create view public.gpdr_view as select * from public.gpdr_test_heap;
+[gpadmin@cdw gpdr]$ cat 3.2.gpdr_cont_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+select type, count(*) cnt from public.gpdr_view            group by type order by type;
+
+[gpadmin@cdw gpdr]$
+
+
+###############################################################################################################
+9. Greenplum DR  Full Recovery 테스트 
+  - 시나리오 
+
+DR Method  |    Primary Cluster                | Recovery Cluster     
+--------------------------------------------------------------------------------------------------------------
+Init.      | Delete the data folder in minio's |
+           |       /gpdr bucket                | 
+           | sh 0.1.gpdr_drop_backup.sh        |
+           |                                   | sh 0.1.gpdr_drop_backup.sh      
+           |                                   | psql -ef 0.2.gpdr_drop_check.sql
+           |                                   | gpstop -af                            
+---------------------------------------------------------------------------------------------------------------             
+config     | gpdr configure backup             | 
+           |  --config-file s3_config_file.yml |    
+           |                                   | gpdr configure restore --config-file s3_config_file.yml 
+           |                                   |      --recovery-cluster-config-file    
+           |                                   |      recovery_cluster_config_file_gp7.yml
+---------------------------------------------------------------------------------------------------------------             
+Full       | psql -ef 0.2.gpdr_drop_check.sql  | 
+Recovery   | psql -ef 1.1.gpdr_full_backup.sql |    
+Test       | psql -ef 1.2.gpdr_full_check.sql  | 
+           | gpdr backup --type full           |  
+           | gpdr info backup                  | 
+           |                                   | gpdr restore --type incr --restore-point 
+           |                                   |       20241014-160821R_gpdr_full_backup 
+           |                                   | 
+           |                                   | gpdr promote 
+           |                                   | gpstart -a  
+           |                                   | psql -ef 1.2.gpdr_full_check.sql 
+--------------------------------------------------------------------------------------------------------------
+  - Log
+
+######### 초기화 및 설정 ##########
+#### minio
+기존에 gpdr를 설정한 적이 있으면, minio에서 /gpdr의 하위 폴더인 data 폴더를 삭제해야 함.
+
+#### primary cluster
+[gpadmin@cdw gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdw gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdw gpdr]$ sh 0.1.gpdr_drop_backup.sh
+...
+If you have previously set the environment, you must delete the backup setting path of minio.
+In the current setting, you need to delete the /gpdr/data subdirectory of minio.
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr configure backup --config-file ~/gpconfigs/s3_config_file.yml
+20241014:15:54:27 gpdr:gpadmin:cdw:024975-[INFO]:-Configuring for backup
+20241014:15:54:27 gpdr:gpadmin:cdw:024975-[INFO]:-Successfully created pgbackrest configuration files for backup at /usr/local/gpdr/configs for the GPDB primary cluster
+20241014:15:54:29 gpdr:gpadmin:cdw:024975-[INFO]:-Creating pgbackrest stanzas for the GPDB primary cluster
+20241014:15:54:31 gpdr:gpadmin:cdw:024975-[INFO]:-Successfully created stanzas for the GPDB primary cluster
+20241014:15:54:31 gpdr:gpadmin:cdw:024975-[INFO]:-Configuring GPDB GUCs
+20241014:15:54:45 gpdr:gpadmin:cdw:024975-[INFO]:-Successfully configured GPDB GUCs and enabled WAL archiving
+20241014:15:54:48 gpdr:gpadmin:cdw:024975-[INFO]:-Successfully finished configuration steps for backup
+[gpadmin@cdw gpdr]$
+
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ sh 0.1.gpdr_drop_backup.sh
+[gpadmin@cdwdr gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpstop -af
+20241014:15:57:32:198125 gpstop:cdwdr:gpadmin-[INFO]:-Starting gpstop with args: -af
+...
+20241014:15:57:36:198125 gpstop:cdwdr:gpadmin-[INFO]:-Database successfully shutdown with no errors reported
+[gpadmin@cdwdr gpdr]$  
+[gpadmin@cdwdr gpdr]$ gpdr configure restore --config-file ~/gpconfigs/s3_config_file.yml --recovery-cluster-config-file ~/gpconfigs/recovery_cluster_config_file_gp7.yml
+20241014:15:59:44 gpdr:gpadmin:cdwdr:200787-[INFO]:-Configuring restore
+20241014:15:59:44 gpdr:gpadmin:cdwdr:200787-[INFO]:-Successfully created pgbackrest configuration files for restore at /usr/local/gpdr/configs for the GPDB recovery cluster
+20241014:15:59:44 gpdr:gpadmin:cdwdr:200787-[INFO]:-Successfully finished configuration steps for restore
+[gpadmin@cdwdr gpdr]$
+
+########## DR 테스트 #########
+#### primary cluster
+[gpadmin@cdw gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdw gpdr]$ psql -ef 1.1.gpdr_full_backup.sql
+create table public.gpdr_test_heap (id int, type text ) distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_ao (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_replicated (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+insert into public.gpdr_test_heap       select i, 'full_heap' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_ao         select i, 'full_ao' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_replicated select i, 'full_replicated' from generate_series(1,100) i;
+INSERT 0 100
+[gpadmin@cdw gpdr]$ psql -ef 1.2.gpdr_full_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr backup --type full
+20241014:16:08:02 gpdr:gpadmin:cdw:031375-[INFO]:-Backing up database
+20241014:16:08:04 gpdr:gpadmin:cdw:031375-[INFO]:-Backup label: 20241014-160803F
+20241014:16:08:22 gpdr:gpadmin:cdw:031375-[INFO]:-Creating checkpoint
+20241014:16:08:22 gpdr:gpadmin:cdw:031375-[INFO]:-Creating restore point 20241014-160821R_gpdr_full_backup
+20241014:16:08:22 gpdr:gpadmin:cdw:031375-[INFO]:-Switching WAL segment file
+20241014:16:08:22 gpdr:gpadmin:cdw:031375-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:16:08:23 gpdr:gpadmin:cdw:031375-[INFO]:-Backup successfully completed
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:16:08:32 gpdr:gpadmin:cdw:032740-[INFO]:-Getting backup information from the repository
+full backup: 20241014-160803F
+   Restore Points:
+      20241014-160821R_gpdr_full_backup: October 14 2024, 16:08:21
+
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ ps -ef | grep postgres
+gpadmin   200867  188984  0 16:10 pts/0    00:00:00 grep --color=auto postgres
+[gpadmin@cdwdr gpdr]$ 
+[gpadmin@cdwdr gpdr]$ gpdr restore --type full --restore-point 20241014-160821R_gpdr_full_backup
+20241014:16:11:19 gpdr:gpadmin:cdwdr:200868-[INFO]:-Restoring database cluster
+20241014:16:11:19 gpdr:gpadmin:cdwdr:200868-[ERROR]:-error occurred while restoring database cluster: one or more data directories are not empty: Cannot run full restore if data directories are not empty. Either run incremental restore or delete the existing directories before running full restore.
+Please refer to /home/gpadmin/gpAdminLogs/gpdr_20241014.log file for details.
+[gpadmin@cdwdr gpdr]$ gpdr restore --type incr --restore-point 20241014-160821R_gpdr_full_backup
+20241014:16:11:44 gpdr:gpadmin:cdwdr:200943-[INFO]:-Restoring database cluster
+20241014:16:11:46 gpdr:gpadmin:cdwdr:200943-[INFO]:-Successfully created pg_hba.conf files on coordinator and all primary segments.
+20241014:16:11:46 gpdr:gpadmin:cdwdr:200943-[INFO]:-Waiting for all segments to replay WAL and shutdown...
+20241014:16:12:46 gpdr:gpadmin:cdwdr:200943-[INFO]:-All segments are shut down
+20241014:16:12:46 gpdr:gpadmin:cdwdr:200943-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpstart -a
+20241014:16:14:09:201867 gpstart:cdwdr:gpadmin-[INFO]:-Starting gpstart with args: -a
+...
+20241014:16:14:10:201867 gpstart:cdwdr:gpadmin-[INFO]:-Database successfully started
+[gpadmin@cdwdr gpdr]$ 
+[gpadmin@cdwdr gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdwdr gpdr]$ psql -ef 1.2.gpdr_full_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+(1 row)
+
+Time: 47.043 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+(1 row)
+
+Time: 8.024 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+(1 row)
+
+Time: 7.418 ms
+[gpadmin@cdwdr gpdr]$
+
+
+
+
+######################################################################################################
+###############################################################################################################
+10. Greenplum DR Incremental Recovery 테스트 
+  - 시나리오 
+
+DR Method  |    Primary Cluster                | Recovery Cluster     
+--------------------------------------------------------------------------------------------------------------
+Init.      | Delete the data folder in minio's |
+           |       /gpdr bucket                | 
+           | sh 0.1.gpdr_drop_backup.sh        |
+           |                                   | sh 0.1.gpdr_drop_backup.sh    
+           |                                   | psql -ef 0.2.gpdr_drop_check.sql
+           |                                   | gpstop -af                            
+---------------------------------------------------------------------------------------------------------------             
+config     | gpdr configure backup             | 
+           |  --config-file s3_config_file.yml |    
+           |                                   | gpdr configure restore --config-file s3_config_file.yml 
+           |                                   |      --recovery-cluster-config-file    
+           |                                   |      recovery_cluster_config_file_gp7.yml
+---------------------------------------------------------------------------------------------------------------             
+Full       | psql -ef 0.2.gpdr_drop_check.sql  | 
+Recovery   | psql -ef 1.1.gpdr_full_backup.sql |    
+           | psql -ef 1.2.gpdr_full_check.sql  | 
+           | gpdr backup --type full           |  
+           | gpdr info backup                  | 
+           |                                   | gpdr restore --type incr --restore-point 
+           |                                   |       20241014-160821R_gpdr_full_backup 
+           |                                   | 
+--------------------------------------------------------------------------------------------------------------
+Incremental| psql -ef 2.1.gpdr_incr_backup.sql | 
+Recovery   | psql -ef 2.2.gpdr_incr_check.sql  |
+           | gpdr backup --type incr           | 
+           | gpdr info backup                  | 
+           |                                   | gpdr restore --type incr --restore-point   
+           |                                   |      20241014-163342R_gpdr_incr_backup
+           |                                   | gpdr promote 
+           |                                   | gpstart -a 
+           |                                   | psql -ef 2.2.gpdr_incr_check.sql 
+           |                                   | gpdr info restore
+--------------------------------------------------------------------------------------------------------------
+  - Log
+
+######### 초기화 및 설정 ##########
+#### minio
+기존에 gpdr를 설정한 적이 있으면, minio에서 /gpdr의 하위 폴더인 data 폴더를 삭제해야 함.
+
+#### primary cluster
+[gpadmin@cdw gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdw gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdw gpdr]$ sh 0.1.gpdr_drop_backup.sh
+...
+If you have previously set the environment, you must delete the backup setting path of minio.
+In the current setting, you need to delete the /gpdr/data subdirectory of minio.
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr configure backup --config-file ~/gpconfigs/s3_config_file.yml
+20241014:16:22:28 gpdr:gpadmin:cdw:033273-[INFO]:-Configuring for backup
+20241014:16:22:29 gpdr:gpadmin:cdw:033273-[INFO]:-Successfully created pgbackrest configuration files for backup at /usr/local/gpdr/configs for the GPDB primary cluster
+20241014:16:22:31 gpdr:gpadmin:cdw:033273-[INFO]:-Creating pgbackrest stanzas for the GPDB primary cluster
+20241014:16:22:32 gpdr:gpadmin:cdw:033273-[INFO]:-Successfully created stanzas for the GPDB primary cluster
+20241014:16:22:32 gpdr:gpadmin:cdw:033273-[INFO]:-Configuring GPDB GUCs
+20241014:16:22:42 gpdr:gpadmin:cdw:033273-[INFO]:-Successfully configured GPDB GUCs and enabled WAL archiving
+20241014:16:22:44 gpdr:gpadmin:cdw:033273-[INFO]:-Successfully finished configuration steps for backup
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdwdr gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdwdr gpdr]$ sh 0.1.gpdr_drop_backup.sh
+[gpadmin@cdwdr gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpstop -af
+20241014:16:21:50:202455 gpstop:cdwdr:gpadmin-[INFO]:-Starting gpstop with args: -af
+...
+20241014:16:21:54:202455 gpstop:cdwdr:gpadmin-[INFO]:-Database successfully shutdown with no errors reported
+[gpadmin@cdwdr gpdr]$  
+[gpadmin@cdwdr gpdr]$ gpdr configure restore --config-file ~/gpconfigs/s3_config_file.yml --recovery-cluster-config-file ~/gpconfigs/recovery_cluster_config_file_gp7.yml
+20241014:16:25:02 gpdr:gpadmin:cdwdr:205076-[INFO]:-Configuring restore
+20241014:16:25:02 gpdr:gpadmin:cdwdr:205076-[INFO]:-Successfully created pgbackrest configuration files for restore at /usr/local/gpdr/configs for the GPDB recovery cluster
+20241014:16:25:02 gpdr:gpadmin:cdwdr:205076-[INFO]:-Successfully finished configuration steps for restore
+[gpadmin@cdwdr gpdr]$
+
+########## Full Recovery  #########
+#### primary cluster
+[gpadmin@cdw gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdw gpdr]$ psql -ef 1.1.gpdr_full_backup.sql
+create table public.gpdr_test_heap (id int, type text ) distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_ao (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_replicated (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+insert into public.gpdr_test_heap       select i, 'full_heap' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_ao         select i, 'full_ao' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_replicated select i, 'full_replicated' from generate_series(1,100) i;
+INSERT 0 100
+
+[gpadmin@cdw gpdr]$ psql -ef 1.2.gpdr_full_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+[gpadmin@cdw gpdr]$ gpdr backup --type full
+20241014:16:26:48 gpdr:gpadmin:cdw:039329-[INFO]:-Backing up database
+20241014:16:26:51 gpdr:gpadmin:cdw:039329-[INFO]:-Backup label: 20241014-162650F
+20241014:16:27:05 gpdr:gpadmin:cdw:039329-[INFO]:-Creating checkpoint
+20241014:16:27:05 gpdr:gpadmin:cdw:039329-[INFO]:-Creating restore point 20241014-162705R_gpdr_full_backup
+20241014:16:27:05 gpdr:gpadmin:cdw:039329-[INFO]:-Switching WAL segment file
+20241014:16:27:06 gpdr:gpadmin:cdw:039329-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:16:27:07 gpdr:gpadmin:cdw:039329-[INFO]:-Backup successfully completed
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:16:27:15 gpdr:gpadmin:cdw:040689-[INFO]:-Getting backup information from the repository
+full backup: 20241014-162650F
+   Restore Points:
+      20241014-162705R_gpdr_full_backup: October 14 2024, 16:27:05
+
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ ps -ef | grep postgres
+gpadmin   205664  188984  0 16:31 pts/0    00:00:00 grep --color=auto postgres
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr restore --type incr --restore-point 20241014-162705R_gpdr_full_backup
+20241014:16:29:12 gpdr:gpadmin:cdwdr:205138-[INFO]:-Restoring database cluster
+20241014:16:29:14 gpdr:gpadmin:cdwdr:205138-[INFO]:-Successfully created pg_hba.conf files on coordinator and all primary segments.
+20241014:16:29:14 gpdr:gpadmin:cdwdr:205138-[INFO]:-Waiting for all segments to replay WAL and shutdown...
+20241014:16:29:44 gpdr:gpadmin:cdwdr:205138-[INFO]:-All segments are shut down
+20241014:16:29:44 gpdr:gpadmin:cdwdr:205138-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$
+
+
+########## Incremental Recovery  #########
+#### primary cluster
+[gpadmin@cdw gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdw gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ psql -ef 2.1.gpdr_incr_backup.sql
+Timing is on.
+insert into public.gpdr_test_heap       select i, 'incr_heap' from generate_series(101,200) i;
+INSERT 0 100
+Time: 34.407 ms
+insert into public.gpdr_test_ao         select i, 'incr_ao' from generate_series(101,200) i;
+INSERT 0 100
+Time: 8.026 ms
+insert into public.gpdr_test_replicated select i, 'incr_replicated' from generate_series(101,200) i;
+INSERT 0 100
+Time: 5.451 ms
+create table public.gpdr_test_incr (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+Time: 20.521 ms
+insert into  public.gpdr_test_incr select i, 'incr_ddl_dml' from generate_series(101,200) i;
+INSERT 0 100
+Time: 6.413 ms
+CREATE EXTENSION plpython3u;
+CREATE EXTENSION
+Time: 54.369 ms
+CREATE OR REPLACE FUNCTION public.gpdr_plpy3_bool(a int) RETURNS boolean AS $$
+# container: plc_python3_shared
+    if (a > 0):
+        return True
+    else:
+        return False
+$$ LANGUAGE plpython3u;
+CREATE FUNCTION
+Time: 12.642 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 1.075 ms
+[gpadmin@cdw gpdr]$ psql -ef 2.2.gpdr_incr_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+ incr_heap | 100
+(2 rows)
+
+Time: 50.320 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+ incr_ao | 100
+(2 rows)
+
+Time: 8.288 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+ incr_replicated | 100
+(2 rows)
+
+Time: 7.034 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 7.376 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 12.417 ms
+[gpadmin@cdw gpdr]$ gpdr backup --type incr
+20241014:16:33:34 gpdr:gpadmin:cdw:040971-[INFO]:-Backing up database
+20241014:16:33:36 gpdr:gpadmin:cdw:040971-[INFO]:-Backup label: 20241014-162650F_20241014-163335I
+20241014:16:33:42 gpdr:gpadmin:cdw:040971-[INFO]:-Creating checkpoint
+20241014:16:33:42 gpdr:gpadmin:cdw:040971-[INFO]:-Creating restore point 20241014-163342R_gpdr_incr_backup
+20241014:16:33:42 gpdr:gpadmin:cdw:040971-[INFO]:-Switching WAL segment file
+20241014:16:33:43 gpdr:gpadmin:cdw:040971-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:16:33:44 gpdr:gpadmin:cdw:040971-[INFO]:-Backup successfully completed
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:16:33:51 gpdr:gpadmin:cdw:042334-[INFO]:-Getting backup information from the repository
+full backup: 20241014-162650F
+   Restore Points:
+      20241014-162705R_gpdr_full_backup: October 14 2024, 16:27:05
+
+   incremental backup: 20241014-162650F_20241014-163335I
+   Restore Points:
+      20241014-163342R_gpdr_incr_backup: October 14 2024, 16:33:42
+
+[gpadmin@cdw gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ ps -ef | grep postgres
+gpadmin   205664  188984  0 16:31 pts/0    00:00:00 grep --color=auto postgres
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr restore --type incr --restore-point 20241014-163342R_gpdr_incr_backup
+20241014:16:36:05 gpdr:gpadmin:cdwdr:205668-[INFO]:-Restoring database cluster
+20241014:16:36:06 gpdr:gpadmin:cdwdr:205668-[INFO]:-Successfully created pg_hba.conf files on coordinator and all primary segments.
+20241014:16:36:06 gpdr:gpadmin:cdwdr:205668-[INFO]:-Waiting for all segments to replay WAL and shutdown...
+20241014:16:36:36 gpdr:gpadmin:cdwdr:205668-[INFO]:-All segments are shut down
+20241014:16:36:36 gpdr:gpadmin:cdwdr:205668-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$ gpdr promote
+20241014:16:40:25 gpdr:gpadmin:cdwdr:206195-[INFO]:-Promoting recovery cluster
+20241014:16:40:25 gpdr:gpadmin:cdwdr:206195-[INFO]:-Waiting for all segments to start up
+20241014:16:40:35 gpdr:gpadmin:cdwdr:206195-[INFO]:-All segments are ready
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-All segments are shut down
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-Cluster has been successfully promoted.
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-You can now run gpstart to start the cluster.
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-Export the following variables:
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-  export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-  export PGPORT=5432
+20241014:16:40:40 gpdr:gpadmin:cdwdr:206195-[INFO]:-Successfully promoted the recovery cluster
+[gpadmin@cdwdr gpdr]$ gpstart -a
+20241014:16:41:01:206442 gpstart:cdwdr:gpadmin-[INFO]:-Starting gpstart with args: -a
+...
+20241014:16:41:02:206442 gpstart:cdwdr:gpadmin-[INFO]:-Database successfully started
+
+[gpadmin@cdwdr gpdr]$ psql -ef 2.2.gpdr_incr_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+ incr_heap | 100
+(2 rows)
+
+Time: 61.538 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+ incr_ao | 100
+(2 rows)
+
+Time: 17.651 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+ incr_replicated | 100
+(2 rows)
+
+Time: 8.549 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 8.723 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 28.394 ms
+
+[gpadmin@cdwdr gpdr]$ gpdr info restore
+20241014:16:42:07 gpdr:gpadmin:cdwdr:206797-[INFO]:-Getting restore information
+
+Latest Completed Restore Info
+-----------------------------
+Restore type:  incremental
+Restore point: 20241014-163342R_gpdr_incr_backup
+Backup label:  20241014-162650F_20241014-163335I
+Restore start: 2024-10-14 16:36:05
+Restore stop:  2024-10-14 16:36:36
+
+[gpadmin@cdwdr gpdr]$
+
+
+
+
+######################################################################################################
+###############################################################################################################
+11. Greenplum DR Continuous Recovery 테스트 
+  - 시나리오 
+
+DR Method  |    Primary Cluster                | Recovery Cluster     
+--------------------------------------------------------------------------------------------------------------
+Init.      | Delete the data folder in minio's |
+           |       /gpdr bucket                | 
+           | sh 0.1.gpdr_drop_backup.sh        |
+           |                                   | sh 0.1.gpdr_drop_backup.sh    
+           |                                   | psql -ef 0.2.gpdr_drop_check.sql
+           |                                   | gpstop -af                            
+---------------------------------------------------------------------------------------------------------------             
+config     | gpdr configure backup             | 
+           |  --config-file s3_config_file.yml |    
+           |                                   | gpdr configure restore --config-file s3_config_file.yml 
+           |                                   |      --recovery-cluster-config-file    
+           |                                   |      recovery_cluster_config_file_gp7.yml
+---------------------------------------------------------------------------------------------------------------             
+Full       | psql -ef 0.2.gpdr_drop_check.sql  | 
+Recovery   | psql -ef 1.1.gpdr_full_backup.sql |    
+           | psql -ef 1.2.gpdr_full_check.sql  | 
+           | gpdr backup --type full           |  
+           | gpdr info backup                  | 
+           |                                   | gpdr restore --type incr --restore-point 
+           |                                   |       20241014-160821R_gpdr_full_backup 
+           |                                   | gpdr info restore
+           |                                   | 
+------------------------------ --------------------------------------------------------------------------------
+Continuous |                                   | gpdr read-replica enable
+setup      |                                   | gpstart -a
+           |                                   | psql -ef 1.2.gpdr_full_check.sql
+------------------------------ --------------------------------------------------------------------------------
+Continuous | psql -ef 2.1.gpdr_incr_backup.sql | 
+Recovery   | psql -ef 2.2.gpdr_incr_check.sql  |
+           | gpdr create-restore-point         | 
+           | gpdr info backup                  | 
+           | psql -ef 3.1.gpdr_cont_backup.sql |    
+           | psql -ef 3.2.gpdr_cont_check.sql  |     
+           | gpdr create-restore-point         | 
+           | gpdr info backup                  | 
+           |                                   | gpdr restore --type continuous --restore-point 
+           |                                   |      20241014-205107R
+           |                                   | gpdr info restore    
+           |                                   | psql -ef 2.2.gpdr_incr_check.sql    
+           |                                   |    
+           |                                   | gpdr restore --type continuous --restore-point latest    
+           |                                   | gpdr info restore 
+           |                                   | psql -ef 3.2.gpdr_cont_check.sql    
+--------------------------------------------------------------------------------------------------------------
+  - Log
+
+######### 초기화 및 설정 ##########
+#### minio
+기존에 gpdr를 설정한 적이 있으면, minio에서 /gpdr의 하위 폴더인 data 폴더를 삭제해야 함.
+
+#### primary cluster
+[gpadmin@cdw gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdw gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdw gpdr]$ sh 0.1.gpdr_drop_backup.sh
+...
+If you have previously set the environment, you must delete the backup setting path of minio.
+In the current setting, you need to delete the /gpdr/data subdirectory of minio.
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr configure backup --config-file ~/gpconfigs/s3_config_file.yml
+20241014:20:17:06 gpdr:gpadmin:cdw:057883-[INFO]:-Configuring for backup
+20241014:20:17:06 gpdr:gpadmin:cdw:057883-[INFO]:-Successfully created pgbackrest configuration files for backup at /usr/local/gpdr/configs for the GPDB primary cluster
+20241014:20:17:08 gpdr:gpadmin:cdw:057883-[INFO]:-Creating pgbackrest stanzas for the GPDB primary cluster
+20241014:20:17:10 gpdr:gpadmin:cdw:057883-[INFO]:-Successfully created stanzas for the GPDB primary cluster
+20241014:20:17:10 gpdr:gpadmin:cdw:057883-[INFO]:-Configuring GPDB GUCs
+20241014:20:17:20 gpdr:gpadmin:cdw:057883-[INFO]:-Successfully configured GPDB GUCs and enabled WAL archiving
+20241014:20:17:23 gpdr:gpadmin:cdw:057883-[INFO]:-Successfully finished configuration steps for backup
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ pwd
+/data/poc/gpdr
+[gpadmin@cdwdr gpdr]$ ls
+0.1.gpdr_drop_backup.sh  1.1.gpdr_full_backup.sql  2.1.gpdr_incr_backup.sql  3.1.gpdr_cont_backup.sql
+0.2.gpdr_drop_check.sql  1.2.gpdr_full_check.sql   2.2.gpdr_incr_check.sql   3.2.gpdr_cont_check.sql
+[gpadmin@cdwdr gpdr]$ sh 0.1.gpdr_drop_backup.sh
+[gpadmin@cdwdr gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdwdr gpdr]$ 
+[gpadmin@cdwdr gpdr]$ gpstop -af
+20241014:20:16:17:217459 gpstop:cdwdr:gpadmin-[INFO]:-Starting gpstop with args: -af
+...
+20241014:20:16:20:217459 gpstop:cdwdr:gpadmin-[INFO]:-Database successfully shutdown with no errors reported
+[gpadmin@cdwdr gpdr]$
+
+[gpadmin@cdwdr gpdr]$  
+[gpadmin@cdwdr gpdr]$ gpdr configure restore --config-file ~/gpconfigs/s3_config_file.yml --recovery-cluster-config-file ~/gpconfigs/recovery_cluster_config_file_gp7.yml
+20241014:20:17:42 gpdr:gpadmin:cdwdr:220086-[INFO]:-Configuring restore
+20241014:20:17:42 gpdr:gpadmin:cdwdr:220086-[INFO]:-Successfully created pgbackrest configuration files for restore at /usr/local/gpdr/configs for the GPDB recovery cluster
+20241014:20:17:42 gpdr:gpadmin:cdwdr:220086-[INFO]:-Successfully finished configuration steps for restore
+[gpadmin@cdwdr gpdr]$
+
+########## Full Recovery  #########
+#### primary cluster
+[gpadmin@cdw gpdr]$ psql -ef 0.2.gpdr_drop_check.sql
+Timing is on.
+psql:0.2.gpdr_drop_check.sql:1: error: Did not find any relations.
+psql:0.2.gpdr_drop_check.sql:2: error: Did not find any relations.
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type
+--------+------+------------------+---------------------+------
+(0 rows)
+
+[gpadmin@cdw gpdr]$ psql -ef 1.1.gpdr_full_backup.sql
+create table public.gpdr_test_heap (id int, type text ) distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_ao (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+create table public.gpdr_test_replicated (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+insert into public.gpdr_test_heap       select i, 'full_heap' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_ao         select i, 'full_ao' from generate_series(1,100) i;
+INSERT 0 100
+insert into public.gpdr_test_replicated select i, 'full_replicated' from generate_series(1,100) i;
+INSERT 0 100
+
+[gpadmin@cdw gpdr]$ psql -ef 1.2.gpdr_full_check.sql
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+
+
+[gpadmin@cdw gpdr]$ gpdr backup --type full
+20241014:20:19:52 gpdr:gpadmin:cdw:063890-[INFO]:-Backing up database
+20241014:20:19:54 gpdr:gpadmin:cdw:063890-[INFO]:-Backup label: 20241014-201953F
+20241014:20:20:12 gpdr:gpadmin:cdw:063890-[INFO]:-Creating checkpoint
+20241014:20:20:12 gpdr:gpadmin:cdw:063890-[INFO]:-Creating restore point 20241014-202012R_gpdr_full_backup
+20241014:20:20:12 gpdr:gpadmin:cdw:063890-[INFO]:-Switching WAL segment file
+20241014:20:20:14 gpdr:gpadmin:cdw:063890-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:20:20:15 gpdr:gpadmin:cdw:063890-[INFO]:-Backup successfully completed
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:20:20:25 gpdr:gpadmin:cdw:065254-[INFO]:-Getting backup information from the repository
+full backup: 20241014-201953F
+   Restore Points:
+      20241014-202012R_gpdr_full_backup: October 14 2024, 20:20:12
+
+[gpadmin@cdw gpdr]$
+
+#### Recovery cluster 
+[gpadmin@cdwdr gpdr]$ ps -ef | grep postgres
+gpadmin   205664  188984  0 16:31 pts/0    00:00:00 grep --color=auto postgres
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr restore --type incr --restore-point 20241014-202012R_gpdr_full_backup
+20241014:20:20:41 gpdr:gpadmin:cdwdr:220154-[INFO]:-Restoring database cluster
+20241014:20:20:43 gpdr:gpadmin:cdwdr:220154-[INFO]:-Successfully created pg_hba.conf files on coordinator and all primary segments.
+20241014:20:20:43 gpdr:gpadmin:cdwdr:220154-[INFO]:-Waiting for all segments to replay WAL and shutdown...
+20241014:20:21:44 gpdr:gpadmin:cdwdr:220154-[INFO]:-All segments are shut down
+20241014:20:21:44 gpdr:gpadmin:cdwdr:220154-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$ gpdr info restore
+20241014:20:48:30 gpdr:gpadmin:cdwdr:220737-[INFO]:-Getting restore information
+
+Latest Completed Restore Info
+-----------------------------
+Restore type:  incremental
+Restore point: 20241014-202012R_gpdr_full_backup
+Backup label:  20241014-201953F
+Restore start: 2024-10-14 20:20:41
+Restore stop:  2024-10-14 20:21:44
+
+Current Restore Info
+-----------------------------
+ Segment ID |  Lag  |     Latest archived WAL    |     Last replayed WAL
+----------------------------------------------------------------------------
+     -1     |    0  |  000000010000000100000001  |  000000010000000100000001
+      0     |    0  |  000000010000000000000038  |  000000010000000000000038
+      1     |    0  |  000000010000000000000038  |  000000010000000000000038
+      2     |    0  |  000000010000000000000038  |  000000010000000000000038
+      3     |    0  |  000000010000000000000038  |  000000010000000000000038
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdw gpdr]$ ############## Continuous Setup ##################### Primary  Cluster ################
+[gpadmin@cdw gpdr]$ ## nothing
+
+[gpadmin@cdwdr gpdr]$ ############## Continuous Setup ##################### Recovery Cluster ################
+[gpadmin@cdwdr gpdr]$ gpdr read-replica enable
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-Read Replica mode has been enabled.
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-You can now run gpstart to start the recovery cluster in Read Replica mode.
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-Make sure to export the following variables first:
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-  export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-  export PGPORT=5432
+20241014:20:49:32 gpdr:gpadmin:cdwdr:220811-[INFO]:-Read Replica mode was enabled successfully.
+[gpadmin@cdwdr gpdr]$ gpstart -a
+20241014:20:49:41:220865 gpstart:cdwdr:gpadmin-[INFO]:-Starting gpstart with args: -a
+...
+20241014:20:49:42:220865 gpstart:cdwdr:gpadmin-[INFO]:-Database successfully started
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ psql -ef 1.2.gpdr_full_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+(1 row)
+
+Time: 57.816 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+(1 row)
+
+Time: 10.750 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+(1 row)
+
+Time: 7.115 ms
+[gpadmin@cdwdr gpdr]$
+
+[gpadmin@cdw gpdr]$ ################## Continuous Recovery ######### Primary Cluster ###########
+[gpadmin@cdw gpdr]$ psql -ef 2.1.gpdr_incr_backup.sql
+Timing is on.
+insert into public.gpdr_test_heap       select i, 'incr_heap' from generate_series(101,200) i;
+INSERT 0 100
+Time: 41.116 ms
+insert into public.gpdr_test_ao         select i, 'incr_ao' from generate_series(101,200) i;
+INSERT 0 100
+Time: 8.912 ms
+insert into public.gpdr_test_replicated select i, 'incr_replicated' from generate_series(101,200) i;
+INSERT 0 100
+Time: 5.519 ms
+create table public.gpdr_test_incr (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+Time: 18.929 ms
+insert into  public.gpdr_test_incr select i, 'incr_ddl_dml' from generate_series(101,200) i;
+INSERT 0 100
+Time: 5.976 ms
+CREATE EXTENSION plpython3u;
+CREATE EXTENSION
+Time: 27.009 ms
+CREATE OR REPLACE FUNCTION public.gpdr_plpy3_bool(a int) RETURNS boolean AS $$
+# container: plc_python3_shared
+    if (a > 0):
+        return True
+    else:
+        return False
+$$ LANGUAGE plpython3u;
+CREATE FUNCTION
+Time: 18.797 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 1.110 ms
+[gpadmin@cdw gpdr]$ psql -ef 2.2.gpdr_incr_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+ incr_heap | 100
+(2 rows)
+
+Time: 54.984 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+ incr_ao | 100
+(2 rows)
+
+Time: 9.165 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+ incr_replicated | 100
+(2 rows)
+
+Time: 7.266 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 8.580 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 13.375 ms
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr create-restore-point
+20241014:20:51:06 gpdr:gpadmin:cdw:066421-[INFO]:-Creating consistent restore point
+20241014:20:51:07 gpdr:gpadmin:cdw:066421-[INFO]:-Creating checkpoint
+20241014:20:51:07 gpdr:gpadmin:cdw:066421-[INFO]:-Creating restore point 20241014-205107R
+20241014:20:51:07 gpdr:gpadmin:cdw:066421-[INFO]:-Switching WAL segment file
+20241014:20:51:23 gpdr:gpadmin:cdw:066421-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:20:51:24 gpdr:gpadmin:cdw:066421-[INFO]:-Consistent restore point was successfully created
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:20:51:32 gpdr:gpadmin:cdw:066895-[INFO]:-Getting backup information from the repository
+full backup: 20241014-201953F
+   Restore Points:
+      20241014-202012R_gpdr_full_backup: October 14 2024, 20:20:12
+      20241014-205107R: October 14 2024, 20:51:07
+
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ psql -ef 3.1.gpdr_cont_backup.sql
+Timing is on.
+insert into public.gpdr_test_heap       select i, 'cont_heap' from generate_series(201,300) i;
+INSERT 0 100
+Time: 29.912 ms
+insert into public.gpdr_test_ao         select i, 'cont_ao' from generate_series(201,300) i;
+INSERT 0 100
+Time: 7.176 ms
+insert into public.gpdr_test_replicated select i, 'cont_replicated' from generate_series(201,300) i;
+INSERT 0 100
+Time: 5.117 ms
+create table public.gpdr_test_cont (id int, type text ) with (appendonly=true, compresstype=zstd, compresslevel=7)  distributed by (id);
+CREATE TABLE
+Time: 15.340 ms
+insert into  public.gpdr_test_cont select i, 'cont_ddl_dml' from generate_series(201,300) i;
+INSERT 0 100
+Time: 7.144 ms
+create view public.gpdr_view as select * from public.gpdr_test_heap;
+CREATE VIEW
+Time: 6.258 ms
+[gpadmin@cdw gpdr]$ psql -ef 3.2.gpdr_cont_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ cont_heap | 100
+ full_heap | 100
+ incr_heap | 100
+(3 rows)
+
+Time: 51.389 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ cont_ao | 100
+ full_ao | 100
+ incr_ao | 100
+(3 rows)
+
+Time: 9.410 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ cont_replicated | 100
+ full_replicated | 100
+ incr_replicated | 100
+(3 rows)
+
+Time: 7.130 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 7.362 ms
+select type, count(*) cnt from public.gpdr_view            group by type order by type;
+   type    | cnt
+-----------+-----
+ cont_heap | 100
+ full_heap | 100
+ incr_heap | 100
+(3 rows)
+
+Time: 6.465 ms
+[gpadmin@cdw gpdr]$ gpdr create-restore-point
+20241014:20:52:02 gpdr:gpadmin:cdw:066962-[INFO]:-Creating consistent restore point
+20241014:20:52:02 gpdr:gpadmin:cdw:066962-[INFO]:-Creating checkpoint
+20241014:20:52:02 gpdr:gpadmin:cdw:066962-[INFO]:-Creating restore point 20241014-205202R
+20241014:20:52:02 gpdr:gpadmin:cdw:066962-[INFO]:-Switching WAL segment file
+20241014:20:52:03 gpdr:gpadmin:cdw:066962-[INFO]:-Checking to see if restore point has been fully archived...
+20241014:20:52:04 gpdr:gpadmin:cdw:066962-[INFO]:-Consistent restore point was successfully created
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$
+[gpadmin@cdw gpdr]$ gpdr info backup
+20241014:20:52:13 gpdr:gpadmin:cdw:067423-[INFO]:-Getting backup information from the repository
+full backup: 20241014-201953F
+   Restore Points:
+      20241014-202012R_gpdr_full_backup: October 14 2024, 20:20:12
+      20241014-205107R: October 14 2024, 20:51:07
+      20241014-205202R: October 14 2024, 20:52:02
+
+[gpadmin@cdw gpdr]$
+
+[gpadmin@cdwdr gpdr]$ ################## Continuous Recovery ######### Recovery Cluster ###########
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr restore --type continuous --restore-point  20241014-205107R
+20241014:20:52:34 gpdr:gpadmin:cdwdr:220969-[INFO]:-Restoring database cluster
+20241014:20:53:04 gpdr:gpadmin:cdwdr:220969-[INFO]:-All segments have reached the restore point
+20241014:20:53:04 gpdr:gpadmin:cdwdr:220969-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$ gpdr info restore
+20241014:20:53:11 gpdr:gpadmin:cdwdr:221102-[INFO]:-Getting restore information
+
+Latest Completed Restore Info
+-----------------------------
+Restore type:  continuous
+Restore point: 20241014-205107R
+Backup label:  20241014-201953F
+Restore start: 2024-10-14 20:52:34
+Restore stop:  2024-10-14 20:53:04
+
+Current Restore Info
+-----------------------------
+ Segment ID |  Lag  |     Latest archived WAL    |     Last replayed WAL
+----------------------------------------------------------------------------
+     -1     |    1  |  000000010000000100000003  |  000000010000000100000002
+      0     |    1  |  00000001000000000000003A  |  000000010000000000000039
+      1     |    1  |  00000001000000000000003A  |  000000010000000000000039
+      2     |    1  |  00000001000000000000003A  |  000000010000000000000039
+      3     |    1  |  00000001000000000000003A  |  000000010000000000000039
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ psql -ef 2.2.gpdr_incr_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ full_heap | 100
+ incr_heap | 100
+(2 rows)
+
+Time: 53.705 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ full_ao | 100
+ incr_ao | 100
+(2 rows)
+
+Time: 7.514 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ full_replicated | 100
+ incr_replicated | 100
+(2 rows)
+
+Time: 6.026 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 5.576 ms
+select public.gpdr_plpy3_bool(-1);
+ gpdr_plpy3_bool
+-----------------
+ f
+(1 row)
+
+Time: 26.109 ms
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr restore --type continuous --restore-point latest
+20241014:20:53:44 gpdr:gpadmin:cdwdr:221179-[INFO]:-Restoring database cluster
+20241014:20:53:44 gpdr:gpadmin:cdwdr:221179-[INFO]:-Restoring latest restore point: 20241014-205202R
+20241014:20:54:14 gpdr:gpadmin:cdwdr:221179-[INFO]:-All segments have reached the restore point
+20241014:20:54:14 gpdr:gpadmin:cdwdr:221179-[INFO]:-Database cluster restore is successfully completed
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$
+[gpadmin@cdwdr gpdr]$ gpdr info restore
+20241014:20:54:18 gpdr:gpadmin:cdwdr:221315-[INFO]:-Getting restore information
+
+Latest Completed Restore Info
+-----------------------------
+Restore type:  continuous
+Restore point: 20241014-205202R
+Backup label:  20241014-201953F
+Restore start: 2024-10-14 20:53:44
+Restore stop:  2024-10-14 20:54:14
+
+Current Restore Info
+-----------------------------
+ Segment ID |  Lag  |     Latest archived WAL    |     Last replayed WAL
+----------------------------------------------------------------------------
+     -1     |    0  |  000000010000000100000003  |  000000010000000100000003
+      0     |    0  |  00000001000000000000003A  |  00000001000000000000003A
+      1     |    0  |  00000001000000000000003A  |  00000001000000000000003A
+      2     |    0  |  00000001000000000000003A  |  00000001000000000000003A
+      3     |    0  |  00000001000000000000003A  |  00000001000000000000003A
+[gpadmin@cdwdr gpdr]$  psql -ef 3.2.gpdr_cont_check.sql
+Timing is on.
+select type, count(*) cnt from public.gpdr_test_heap       group by type order by type;
+   type    | cnt
+-----------+-----
+ cont_heap | 100
+ full_heap | 100
+ incr_heap | 100
+(3 rows)
+
+Time: 55.624 ms
+select type, count(*) cnt from public.gpdr_test_ao         group by type order by type;
+  type   | cnt
+---------+-----
+ cont_ao | 100
+ full_ao | 100
+ incr_ao | 100
+(3 rows)
+
+Time: 13.626 ms
+select type, count(*) cnt from public.gpdr_test_replicated group by type order by type;
+      type       | cnt
+-----------------+-----
+ cont_replicated | 100
+ full_replicated | 100
+ incr_replicated | 100
+(3 rows)
+
+Time: 8.588 ms
+select type, count(*) cnt from public.gpdr_test_incr       group by type order by type;
+     type     | cnt
+--------------+-----
+ incr_ddl_dml | 100
+(1 row)
+
+Time: 8.054 ms
+select type, count(*) cnt from public.gpdr_view            group by type order by type;
+   type    | cnt
+-----------+-----
+ cont_heap | 100
+ full_heap | 100
+ incr_heap | 100
+(3 rows)
+
+Time: 7.002 ms
+[gpadmin@cdwdr gpdr]$
+
+
+
+
+
+
+
